@@ -42,6 +42,12 @@ const (
 	SklappTakeoverLabel string = "sklapp.things.sklirg.io/name"
 )
 
+type loggerSklapp string
+
+const (
+	loggerSklappName loggerSklapp = "sklapp_name"
+)
+
 // SklAppReconciler reconciles a SklApp object
 type SklAppReconciler struct {
 	client.Client
@@ -73,8 +79,10 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	ctx = context.WithValue(ctx, "sklapp", app.Name)
+	ctx = context.WithValue(ctx, loggerSklappName, app.Name)
 	logger = logger.WithValues("sklapp", app.Name)
+
+	logger.Info("reconciling")
 
 	// Ensure SA exists
 	var serviceAccount corev1.ServiceAccount
@@ -218,8 +226,8 @@ func (r *SklAppReconciler) statefulset(ctx context.Context) (*appsv1.StatefulSet
 }
 
 func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
-	containers := make([]corev1.Container, 0)
-	containers = append(containers, corev1.Container{
+	containers := make([]corev1.Container, 1)
+	containers[0] = corev1.Container{
 		Name:      app.Name,
 		Image:     app.Spec.Image,
 		Resources: app.Spec.Resources,
@@ -231,7 +239,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		},
 		Env:     app.Spec.Env,
 		EnvFrom: app.Spec.EnvFrom,
-	})
+	}
 	return corev1.PodTemplateSpec{
 		Spec: corev1.PodSpec{
 			ServiceAccountName: app.Name,

@@ -34,7 +34,7 @@ import (
 type SklAppSpec struct {
 	// Image to use for the application
 	Image string `json:"image"`
-	// ApplicationType specifices what kind of apps/v1 to use for running the app. Defaults to Deployment.
+	// ApplicationType specifies what kind of apps/v1 to use for running the app. Defaults to Deployment.
 	// +kubebuilder:default=Deployment
 	// +kubebuilder:validation:Enum=Deployment;StatefulSet
 	// +kubebuilder:validation:Optional
