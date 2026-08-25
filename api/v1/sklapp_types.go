@@ -17,33 +17,46 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// Important: Run "make" to regenerate code after modifying this file
+
+// The following markers will use OpenAPI v3 schema to validate the value
+// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+
+// For Kubernetes API conventions, see:
+// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
 
 // SklAppSpec defines the desired state of SklApp
 type SklAppSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of SklApp. Edit sklapp_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
+	// Image to use for the application
+	Image string `json:"image"`
+	// ApplicationType specifices what kind of apps/v1 to use for running the app. Defaults to Deployment.
+	// +kubebuilder:default=Deployment
+	// +kubebuilder:validation:Enum=Deployment;StatefulSet
+	// +kubebuilder:validation:Optional
+	ApplicationType *string `json:"application_type"`
+	// Replicas for the application
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Optional
+	Replicas *int32 `json:"replicas"`
+	// Resources for the application
+	Resources corev1.ResourceRequirements `json:"resources"`
+	// Port for the application
+	Port int32 `json:"port"`
+	// Env variables to pass to the application container
+	// +kubebuilder:validation:Optional
+	Env []corev1.EnvVar `json:"env"`
+	// EnvFrom to pass to the application container
+	// +kubebuilder:validation:Optional
+	EnvFrom []corev1.EnvFromSource `json:"envfrom"`
 }
 
 // SklAppStatus defines the observed state of SklApp.
 type SklAppStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
 	// conditions represent the current state of the SklApp resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
