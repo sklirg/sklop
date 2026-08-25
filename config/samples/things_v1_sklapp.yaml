@@ -1,0 +1,9 @@
+apiVersion: things.sklirg.io/v1
+kind: SklApp
+metadata:
+  labels:
+    app.kubernetes.io/name: sklop
+    app.kubernetes.io/managed-by: kustomize
+  name: sklapp-sample
+spec:
+  # TODO(user): Add fields here
