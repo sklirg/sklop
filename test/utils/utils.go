@@ -133,8 +133,17 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
-func LoadImageToKindClusterWithName(name string) error {
+// LoadImageArchiveToKindCluster loads a container image archive (as produced
+// by `ko build --tarball`) into the kind cluster.
+//
+// We deliberately avoid "kind load docker-image" plus a local container
+// daemon: it shells out to the docker CLI for its presence check regardless
+// of provider, and on newer Docker Engine versions (containerd image store),
+// an image loaded via -L/--local can't reliably be re-tagged/re-saved
+// afterwards (see moby/moby#52897, #53293). Building straight to a tarball
+// sidesteps the daemon entirely, so it works the same on Docker, Podman, or
+// no local daemon at all.
+func LoadImageArchiveToKindCluster(archivePath string) error {
 	cluster := defaultKindCluster
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
@@ -144,32 +153,8 @@ func LoadImageToKindClusterWithName(name string) error {
 		kindBinary = v
 	}
 
-	// "kind load docker-image" always shells out to the docker CLI for its local
-	// image-presence check, even when the cluster itself was created with the
-	// (experimental) Podman provider. Save the image to an archive ourselves,
-	// with whichever container tool is actually available, and load that
-	// archive instead so this works on both Docker (e.g. GitHub Actions) and
-	// Podman-only machines.
-	saveTool := "podman"
-	if _, err := exec.LookPath("docker"); err == nil {
-		saveTool = "docker"
-	}
-
-	archive, err := os.CreateTemp("", "kind-image-*.tar")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file for image archive: %w", err)
-	}
-	archivePath := archive.Name()
-	_ = archive.Close()
-	defer func() { _ = os.Remove(archivePath) }()
-
-	saveCmd := exec.Command(saveTool, "save", "-o", archivePath, name)
-	if _, err := Run(saveCmd); err != nil {
-		return err
-	}
-
-	loadCmd := exec.Command(kindBinary, "load", "image-archive", archivePath, "--name", cluster)
-	_, err = Run(loadCmd)
+	cmd := exec.Command(kindBinary, "load", "image-archive", archivePath, "--name", cluster)
+	_, err := Run(cmd)
 	return err
 }
 

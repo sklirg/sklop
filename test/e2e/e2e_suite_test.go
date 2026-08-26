@@ -31,18 +31,21 @@ import (
 	"github.com/sklirg/sklop/test/utils"
 )
 
+// e2eImageRepo is the repo the e2e manager image is built under. It must stay
+// a two-segment, dotted name that isn't literally "ko.local": a bare single
+// segment (e.g. "sklop") gets silently normalized by container tooling to
+// docker.io/library/sklop, and ko treats the exact string "ko.local" in
+// KO_DOCKER_REPO as a magic value that forces local-daemon mode, which
+// conflicts with the tarball-only build used below.
+const e2eImageRepo = "e2e.local"
+
 var (
-	// managerImageTag is the tag `make docker-build` gives the manager image.
-	// Defaults to "testing" (rather than "latest") so e2e runs don't collide with
-	// an image tag already in use for manual testing. Override with E2E_IMAGE_TAG.
+	// managerImageTag is the tag the e2e manager image is built with. Defaults
+	// to "testing" (rather than "latest") so e2e runs don't collide with an
+	// image tag already in use for manual testing. Override with E2E_IMAGE_TAG.
 	managerImageTag = envOrDefault("E2E_IMAGE_TAG", "testing")
-	// managerImage is the manager image to be built and loaded for testing.
-	// `make docker-build` uses ko's -B (base-import-paths) flag, which publishes
-	// to the local container daemon as ko.local/sklop (cmd/sklop's base import
-	// path). A bare "ko.local" alone would get silently normalized by the local
-	// container daemon to docker.io/library/ko.local, so -B's extra path segment
-	// is required, not cosmetic.
-	managerImage = fmt.Sprintf("ko.local/sklop:%s", managerImageTag)
+	// managerImage is the manager image built and loaded for testing.
+	managerImage = fmt.Sprintf("%s/sklop:%s", e2eImageRepo, managerImageTag)
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -68,16 +71,27 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("building the manager image")
-	// docker-build builds with ko, which always publishes under the ko.local/sklop
-	// name (any IMG override is ignored), so only TAG is passed here.
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("TAG=%s", managerImageTag))
-	_, err := utils.Run(cmd)
+	// Built straight to a tarball, bypassing any local container daemon (not
+	// `make docker-build`, which loads into one). This avoids a Docker/
+	// containerd-image-store bug on GitHub-hosted runners where an image
+	// loaded via -L/--local can't reliably be re-tagged or re-saved afterwards
+	// (see moby/moby#52897, #53293) - and works the same with no daemon at all.
+	ExpectWithOffset(1, os.Setenv("KO_DOCKER_REPO", e2eImageRepo)).To(Succeed())
+	archive, err := os.CreateTemp("", "e2e-manager-*.tar")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create temp file for the manager image archive")
+	archivePath := archive.Name()
+	ExpectWithOffset(1, archive.Close()).To(Succeed())
+	DeferCleanup(func() { _ = os.Remove(archivePath) })
+
+	cmd := exec.Command("ko", "build", "-B",
+		"--tags", managerImageTag, "--tarball", archivePath, "--push=false", "./cmd/sklop")
+	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
 	// TODO(user): If you want to change the e2e test vendor from Kind,
 	// ensure the image is built and available, then remove the following block.
 	By("loading the manager image on Kind")
-	err = utils.LoadImageToKindClusterWithName(managerImage)
+	err = utils.LoadImageArchiveToKindCluster(archivePath)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
 
 	configureKubectlKubeRC()
