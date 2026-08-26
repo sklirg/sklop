@@ -1,5 +1,14 @@
-# Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+# TAG is the tag ko applies when building/pushing, and (with KO_DOCKER_REPO below)
+# what IMG defaults to, so a custom tag only needs to be set once.
+TAG ?= latest
+# KO_DOCKER_REPO is the repo docker-push publishes to (ko reads this directly)
+# and feeds IMG's default below. docker-build (-L, local) doesn't use this: ko
+# defaults local builds to the ko.local repo on its own.
+KO_DOCKER_REPO ?= ghcr.io/sklirg/sklop
+# IMG is the full image reference used by deploy/undeploy/build-installer.
+# Defaults to the image ko produces from KO_DOCKER_REPO + TAG; override directly
+# for a reference ko wouldn't produce itself.
+IMG ?= $(KO_DOCKER_REPO):$(TAG)
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -108,22 +117,23 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager cmd/sklop/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	go run ./cmd/sklop/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -LB ./cmd/sklop
+docker-build: ## Build a local container image with the manager, tagged $(TAG).
+	$(CONTAINER_TOOL) build -LB --tags $(TAG) ./cmd/sklop
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) build -B ./cmd/sklop
+docker-push: export KO_DOCKER_REPO := $(KO_DOCKER_REPO)
+docker-push: ## Push a container image with the manager, tagged $(TAG), to KO_DOCKER_REPO.
+	$(CONTAINER_TOOL) build --bare --tags $(TAG) ./cmd/sklop
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:

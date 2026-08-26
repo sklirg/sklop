@@ -139,13 +139,37 @@ func LoadImageToKindClusterWithName(name string) error {
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...)
-	_, err := Run(cmd)
+
+	// "kind load docker-image" always shells out to the docker CLI for its local
+	// image-presence check, even when the cluster itself was created with the
+	// (experimental) Podman provider. Save the image to an archive ourselves,
+	// with whichever container tool is actually available, and load that
+	// archive instead so this works on both Docker (e.g. GitHub Actions) and
+	// Podman-only machines.
+	saveTool := "podman"
+	if _, err := exec.LookPath("docker"); err == nil {
+		saveTool = "docker"
+	}
+
+	archive, err := os.CreateTemp("", "kind-image-*.tar")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for image archive: %w", err)
+	}
+	archivePath := archive.Name()
+	_ = archive.Close()
+	defer func() { _ = os.Remove(archivePath) }()
+
+	saveCmd := exec.Command(saveTool, "save", "-o", archivePath, name)
+	if _, err := Run(saveCmd); err != nil {
+		return err
+	}
+
+	loadCmd := exec.Command(kindBinary, "load", "image-archive", archivePath, "--name", cluster)
+	_, err = Run(loadCmd)
 	return err
 }
 

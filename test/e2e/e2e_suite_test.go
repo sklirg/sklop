@@ -32,11 +32,27 @@ import (
 )
 
 var (
+	// managerImageTag is the tag `make docker-build` gives the manager image.
+	// Defaults to "testing" (rather than "latest") so e2e runs don't collide with
+	// an image tag already in use for manual testing. Override with E2E_IMAGE_TAG.
+	managerImageTag = envOrDefault("E2E_IMAGE_TAG", "testing")
 	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "example.com/sklop:v0.0.1"
+	// `make docker-build` uses ko's -B (base-import-paths) flag, which publishes
+	// to the local container daemon as ko.local/sklop (cmd/sklop's base import
+	// path). A bare "ko.local" alone would get silently normalized by the local
+	// container daemon to docker.io/library/ko.local, so -B's extra path segment
+	// is required, not cosmetic.
+	managerImage = fmt.Sprintf("ko.local/sklop:%s", managerImageTag)
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
+
+func envOrDefault(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return def
+}
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
 // The default setup requires Kind and CertManager.
@@ -52,7 +68,9 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
+	// docker-build builds with ko, which always publishes under the ko.local/sklop
+	// name (any IMG override is ignored), so only TAG is passed here.
+	cmd := exec.Command("make", "docker-build", fmt.Sprintf("TAG=%s", managerImageTag))
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
