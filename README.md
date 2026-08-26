@@ -8,16 +8,22 @@
 
 ### Prerequisites
 - go version v1.24.6+
-- docker version 17.03+.
+- [ko](https://ko.build) version 0.15+, plus a local container daemon (Docker or Podman) for `docker-build`.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
 ### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+**Build and push your image:**
 
 ```sh
-make docker-build docker-push IMG=<some-registry>/sklop:tag
+export KO_DOCKER_REPO=<some-registry>
+make docker-push TAG=<tag>
 ```
+
+Images are built and published with [ko](https://ko.build), which publishes to the
+repository named by the `KO_DOCKER_REPO` environment variable, under the `sklop`
+package name, tagged with `TAG` (default `latest`) — the `IMG` variable has no
+effect on `docker-build`/`docker-push`.
 
 **NOTE:** This image ought to be published in the personal registry you specified.
 And it is required to have access to pull the image from the working environment.
@@ -32,8 +38,11 @@ make install
 **Deploy the Manager to the cluster with the image specified by `IMG`:**
 
 ```sh
-make deploy IMG=<some-registry>/sklop:tag
+make deploy IMG=<some-registry>/sklop:<tag>
 ```
+
+(`ko` always publishes under the `sklop` package name, so `IMG` here must match
+`$KO_DOCKER_REPO/sklop:<tag>`, using the same `TAG` passed to `docker-push`.)
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
 privileges or be logged in as admin.
@@ -75,7 +84,7 @@ Following the options to release and provide this solution to the users.
 1. Build the installer for the image built and published in the registry:
 
 ```sh
-make build-installer IMG=<some-registry>/sklop:tag
+make build-installer IMG=<some-registry>/sklop:latest
 ```
 
 **NOTE:** The makefile target mentioned above generates an 'install.yaml'
