@@ -68,6 +68,9 @@ type SklAppSpec struct {
 	// RunAsUser is set here to a non-root UID the image supports.
 	// +kubebuilder:validation:Optional
 	RunAsUser *int64 `json:"runAsUser"`
+	// URL to the application to expose it to the world (hello world!)
+	// +kubebuilder:validation:Optional
+	// URL *string `json:"url"`
 }
 
 // SklAppStatus defines the observed state of SklApp.
@@ -79,10 +82,6 @@ type SklAppStatus struct {
 	// - "Available": the resource is fully functional
 	// - "Progressing": the resource is being created or updated
 	// - "Degraded": the resource failed to reach or maintain its desired state
-	// The "Ready" condition reflects the outcome of the most recent reconcile
-	// pass: True once the desired Deployment/StatefulSet exists and is owned
-	// by this SklApp, False on a reconciliation error, Unknown while still
-	// being created or updated.
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -90,6 +89,10 @@ type SklAppStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// The "Ready" condition reflects the outcome of the most recent reconcile
+	// pass: True once the desired Deployment/StatefulSet exists and is owned
+	// by this SklApp, False on a reconciliation error, Unknown while still
+	// being created or updated.
 	// ready reflects the readiness of the underlying Deployment/StatefulSet,
 	// formatted as "readyReplicas/replicas".
 	// +optional
