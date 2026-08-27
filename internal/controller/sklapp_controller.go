@@ -45,12 +45,13 @@ const (
 	SklappAppLabel     string = "app"
 	SklappAppNameLabel string = "app.kubernetes.io/name"
 
-	SklappStatusProgressing string = "Progressing"
-	SklappStatusAvailable   string = "Available"
-	SklappStatusDegraded    string = "Degraded"
+	// SklappStatusReady is the single canonical condition type reflecting
+	// the outcome of the most recent reconcile pass.
+	SklappStatusReady string = "Ready"
 
 	SklappStatusReconciling         string = "Reconciling"
 	SklappStatusReconciliationError string = "ReconciliationError"
+	SklappStatusReconciled          string = "Reconciled"
 )
 
 type loggerSklapp string
@@ -95,33 +96,35 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 
 	logger.Info("reconciling")
 
-	// Update status when exiting
+	ready := false
+
+	// Update the Ready condition and persist status when exiting, so it
+	// always reflects the outcome of this reconcile pass - regardless of
+	// which return path below was taken - rather than a per-branch
+	// condition type that may not get updated on every pass.
 	defer func() {
+		condition := v1.Condition{
+			Type:    SklappStatusReady,
+			Status:  v1.ConditionUnknown,
+			Reason:  SklappStatusReconciling,
+			Message: "Reconciling",
+		}
+		switch {
+		case reterr != nil:
+			condition.Status = v1.ConditionFalse
+			condition.Reason = SklappStatusReconciliationError
+			condition.Message = reterr.Error()
+		case ready:
+			condition.Status = v1.ConditionTrue
+			condition.Reason = SklappStatusReconciled
+			condition.Message = "Reconciled"
+		}
+		meta.SetStatusCondition(&app.Status.Conditions, condition)
+
 		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
 			reterr = errors.Join(reterr, statusErr)
 		}
 	}()
-
-	if len(app.Status.Conditions) == 0 {
-		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
-			Type:    SklappStatusProgressing,
-			Status:  v1.ConditionUnknown,
-			Reason:  SklappStatusReconciling,
-			Message: "Reconciling",
-		})
-	} else {
-		for _, condition := range app.Status.Conditions {
-			if condition.Type == SklappStatusDegraded {
-				meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
-					Type:    SklappStatusProgressing,
-					Status:  v1.ConditionUnknown,
-					Reason:  SklappStatusReconciling,
-					Message: "Reconciling",
-				})
-				break
-			}
-		}
-	}
 
 	// Ensure SA exists
 	var serviceAccount corev1.ServiceAccount
@@ -141,13 +144,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		}
 		return ctrl.Result{}, nil
 	} else if err != nil && !apierrors.IsNotFound(err) {
-		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
-			Type:    SklappStatusDegraded,
-			Status:  v1.ConditionTrue,
-			Reason:  SklappStatusReconciliationError,
-			Message: fmt.Sprintf("Failed to get ServiceAccount: %s", err),
-		})
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to get ServiceAccount: %w", err)
 	} else if !hasOwnerReference(&serviceAccount, &app) {
 		serviceAccount.OwnerReferences = append(serviceAccount.OwnerReferences, ownerReference(&app))
 		if err := r.Update(ctx, &serviceAccount); err != nil {
@@ -158,24 +155,12 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 
 	updated, err := r.reconcileApplicationType(ctx, &app)
 	if err != nil {
-		errmsg := fmt.Sprintf("failed to reconcile application type \"%s\": %s", *app.Spec.ApplicationType, err)
-		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
-			Type:    SklappStatusDegraded,
-			Status:  v1.ConditionTrue,
-			Reason:  SklappStatusReconciliationError,
-			Message: errmsg,
-		})
-		return ctrl.Result{}, errors.New(errmsg)
+		return ctrl.Result{}, fmt.Errorf("failed to reconcile application type %q: %w", *app.Spec.ApplicationType, err)
 	} else if updated {
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
-	meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
-		Type:    SklappStatusAvailable,
-		Status:  v1.ConditionTrue,
-		Reason:  "Reconciled",
-		Message: "Reconciled",
-	})
+	ready = true
 
 	return ctrl.Result{}, nil
 }
