@@ -115,17 +115,17 @@ type SklAppStatus struct {
 	// pass: True once the desired Deployment/StatefulSet exists and is owned
 	// by this SklApp, False on a reconciliation error, Unknown while still
 	// being created or updated.
-	// ready reflects the readiness of the underlying Deployment/StatefulSet,
+	// Healthy reflects the readiness of the underlying Deployment/StatefulSet,
 	// formatted as "readyReplicas/replicas".
 	// +optional
-	Ready string `json:"ready,omitempty"`
+	Healthy string `json:"healthy,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.ready"
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=".spec.url"
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Healthy",type="string",JSONPath=".status.conditions[?(@.type=='Healthy')].status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SklApp is the Schema for the sklapps API

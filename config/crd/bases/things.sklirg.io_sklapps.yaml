@@ -21,8 +21,8 @@ spec:
     - jsonPath: .spec.url
       name: URL
       type: string
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
-      name: Status
+    - jsonPath: .status.conditions[?(@.type=='Healthy')].status
+      name: Healthy
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -2415,13 +2415,9 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              ready:
+              healthy:
                 description: |-
-                  The "Ready" condition reflects the outcome of the most recent reconcile
-                  pass: True once the desired Deployment/StatefulSet exists and is owned
-                  by this SklApp, False on a reconciliation error, Unknown while still
-                  being created or updated.
-                  ready reflects the readiness of the underlying Deployment/StatefulSet,
+                  Healthy reflects the readiness of the underlying Deployment/StatefulSet,
                   formatted as "readyReplicas/replicas".
                 type: string
             type: object
