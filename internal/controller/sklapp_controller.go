@@ -129,8 +129,9 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	if err != nil && apierrors.IsNotFound(err) {
 		serviceAccount = corev1.ServiceAccount{
 			ObjectMeta: v1.ObjectMeta{
-				Name:      app.Name,
-				Namespace: app.Namespace,
+				Name:            app.Name,
+				Namespace:       app.Namespace,
+				OwnerReferences: []v1.OwnerReference{ownerReference(&app)},
 			},
 			AutomountServiceAccountToken: new(false),
 		}
