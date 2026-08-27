@@ -214,7 +214,7 @@ spec:
                   - name
                   type: object
                 type: array
-              envfrom:
+              envFrom:
                 description: EnvFrom to pass to the application container
                 items:
                   description: EnvFromSource represents the source of a set of ConfigMaps

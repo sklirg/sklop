@@ -54,7 +54,7 @@ type SklAppSpec struct {
 	Env []corev1.EnvVar `json:"env"`
 	// EnvFrom to pass to the application container
 	// +kubebuilder:validation:Optional
-	EnvFrom []corev1.EnvFromSource `json:"envfrom"`
+	EnvFrom []corev1.EnvFromSource `json:"envFrom"`
 	// Volumes to make available to the pod
 	// +kubebuilder:validation:Optional
 	Volumes []corev1.Volume `json:"volumes"`
