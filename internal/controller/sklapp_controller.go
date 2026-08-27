@@ -94,6 +94,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 
 	ctx = context.WithValue(ctx, loggerSklappName, app.Name)
 	logger = logger.WithValues("sklapp", app.Name)
+	ctx = logf.IntoContext(ctx, logger)
 
 	logger.Info("reconciling")
 
@@ -122,6 +123,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		}
 		meta.SetStatusCondition(&app.Status.Conditions, condition)
 
+		logger.Info("updating sklapp status", "readyCondition", condition.Status, "reason", condition.Reason, "ready", app.Status.Ready)
 		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
 			// A non-nil error must never be paired with a non-empty Result:
 			// controller-runtime ignores Result whenever error is set and
@@ -136,6 +138,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	var serviceAccount corev1.ServiceAccount
 	err = r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &serviceAccount)
 	if err != nil && apierrors.IsNotFound(err) {
+		logger.Info("serviceaccount not found, creating it")
 		serviceAccount = corev1.ServiceAccount{
 			ObjectMeta: v1.ObjectMeta{
 				Name:            app.Name,
@@ -146,30 +149,39 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		}
 		err := r.Create(ctx, &serviceAccount)
 		if err != nil {
+			logger.Error(err, "failed to create serviceaccount")
 			return ctrl.Result{}, err
 		}
+		logger.Info("created serviceaccount, ending this reconcile pass")
 		return ctrl.Result{}, nil
 	} else if err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to get serviceaccount")
 		return ctrl.Result{}, fmt.Errorf("failed to get ServiceAccount: %w", err)
 	} else if !hasOwnerReference(&serviceAccount, &app) {
+		logger.Info("serviceaccount missing owner reference, backfilling it and requeueing")
 		serviceAccount.OwnerReferences = append(serviceAccount.OwnerReferences, ownerReference(&app))
 		if err := r.Update(ctx, &serviceAccount); err != nil {
+			logger.Error(err, "failed to update serviceaccount owner reference")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
+	logger.Info("reconciling application type", "applicationType", *app.Spec.ApplicationType)
 	updated, readyStatus, err := r.reconcileApplicationType(ctx, &app)
 	if err != nil {
+		logger.Error(err, "failed to reconcile application type", "applicationType", *app.Spec.ApplicationType)
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile application type %q: %w", *app.Spec.ApplicationType, err)
 	}
 	if readyStatus != "" {
 		app.Status.Ready = readyStatus
 	}
 	if updated {
+		logger.Info("application type reconciliation made changes, requeueing", "applicationType", *app.Spec.ApplicationType)
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
+	logger.Info("reconcile complete, nothing left to do", "ready", readyStatus)
 	ready = true
 
 	return ctrl.Result{}, nil
@@ -230,13 +242,19 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	// if no found, look for apps via labels => if found, set ownerreference
 	// if still no found, create it
 
+	logger := logf.FromContext(ctx)
+
 	var deploy appsv1.Deployment
 	found := true
 	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &deploy)
 	if err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to get deployment")
 		return nil, false, err
 	} else if err != nil {
+		logger.Info("deployment not found by name, looking for a takeover candidate by label")
 		found = false
+	} else {
+		logger.Info("found deployment by name")
 	}
 
 	// Look for the deployment via labels instead
@@ -253,12 +271,14 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 			},
 		})
 		if err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "failed to list deployments by takeover label")
 			return nil, false, err
 		}
 		if len(deploymentlist.Items) > 1 {
 			return nil, false, fmt.Errorf("found more than 1 deployment labelled with this app")
 		}
 		if len(deploymentlist.Items) == 1 {
+			logger.Info("found deployment by takeover label", "deployment", deploymentlist.Items[0].Name)
 			deploy = deploymentlist.Items[0]
 			found = true
 		}
@@ -266,6 +286,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 
 	// If still no deployment, create it
 	if !found {
+		logger.Info("no deployment found, creating it")
 		deploy = appsv1.Deployment{
 			ObjectMeta: v1.ObjectMeta{
 				Name:            app.Name,
@@ -285,15 +306,19 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 		}
 		err := r.Create(ctx, &deploy)
 		if err != nil {
+			logger.Error(err, "failed to create deployment")
 			return nil, false, err
 		}
+		logger.Info("created deployment, requeueing")
 		return &deploy, true, nil
 	}
 
 	if !hasOwnerReference(&deploy, app) {
+		logger.Info("deployment missing owner reference, backfilling it and requeueing")
 		deploy.OwnerReferences = append(deploy.OwnerReferences, ownerReference(app))
 		err := r.Update(ctx, &deploy)
 		if err != nil {
+			logger.Error(err, "failed to update deployment owner reference")
 			return nil, false, err
 		}
 		return nil, true, nil
@@ -305,16 +330,21 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	// Template) avoids false positives from fields the API server defaults
 	// on write, such as Container.ImagePullPolicy.
 	desiredTemplate := podTemplate(app)
-	if !equality.Semantic.DeepEqual(deploy.Spec.Replicas, app.Spec.Replicas) ||
-		!equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desiredTemplate)) {
+	replicasDrifted := !equality.Semantic.DeepEqual(deploy.Spec.Replicas, app.Spec.Replicas)
+	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desiredTemplate))
+	if replicasDrifted || templateDrifted {
+		logger.Info("deployment spec drifted from SklApp spec, correcting it and requeueing",
+			"replicasDrifted", replicasDrifted, "templateDrifted", templateDrifted)
 		deploy.Spec.Replicas = app.Spec.Replicas
 		deploy.Spec.Template = desiredTemplate
 		if err := r.Update(ctx, &deploy); err != nil {
+			logger.Error(err, "failed to correct deployment drift")
 			return nil, false, err
 		}
 		return &deploy, true, nil
 	}
 
+	logger.Info("deployment already matches SklApp spec, nothing to do")
 	return &deploy, false, nil
 }
 
@@ -323,13 +353,19 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 	// if no found, look for apps via labels => if found, set ownerreference
 	// if still no found, create it
 
+	logger := logf.FromContext(ctx)
+
 	var sts appsv1.StatefulSet
 	found := true
 	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &sts)
 	if err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to get statefulset")
 		return nil, false, err
 	} else if err != nil {
+		logger.Info("statefulset not found by name, looking for a takeover candidate by label")
 		found = false
+	} else {
+		logger.Info("found statefulset by name")
 	}
 
 	// Look for the statefulset via labels instead
@@ -346,12 +382,14 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 			},
 		})
 		if err != nil && !apierrors.IsNotFound(err) {
+			logger.Error(err, "failed to list statefulsets by takeover label")
 			return nil, false, err
 		}
 		if len(statefulsetlist.Items) > 1 {
 			return nil, false, fmt.Errorf("found more than 1 statefulset labelled with this app")
 		}
 		if len(statefulsetlist.Items) == 1 {
+			logger.Info("found statefulset by takeover label", "statefulset", statefulsetlist.Items[0].Name)
 			sts = statefulsetlist.Items[0]
 			found = true
 		}
@@ -359,6 +397,7 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 
 	// If still no statefulset, create it
 	if !found {
+		logger.Info("no statefulset found, creating it")
 		sts = appsv1.StatefulSet{
 			ObjectMeta: v1.ObjectMeta{
 				Name:            app.Name,
@@ -378,15 +417,19 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 		}
 		err := r.Create(ctx, &sts)
 		if err != nil {
+			logger.Error(err, "failed to create statefulset")
 			return nil, false, err
 		}
+		logger.Info("created statefulset, requeueing")
 		return &sts, true, nil
 	}
 
 	if !hasOwnerReference(&sts, app) {
+		logger.Info("statefulset missing owner reference, backfilling it and requeueing")
 		sts.OwnerReferences = append(sts.OwnerReferences, ownerReference(app))
 		err := r.Update(ctx, &sts)
 		if err != nil {
+			logger.Error(err, "failed to update statefulset owner reference")
 			return nil, false, err
 		}
 		return nil, true, nil
@@ -398,16 +441,21 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 	// Template) avoids false positives from fields the API server defaults
 	// on write, such as Container.ImagePullPolicy.
 	desiredTemplate := podTemplate(app)
-	if !equality.Semantic.DeepEqual(sts.Spec.Replicas, app.Spec.Replicas) ||
-		!equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desiredTemplate)) {
+	replicasDrifted := !equality.Semantic.DeepEqual(sts.Spec.Replicas, app.Spec.Replicas)
+	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desiredTemplate))
+	if replicasDrifted || templateDrifted {
+		logger.Info("statefulset spec drifted from SklApp spec, correcting it and requeueing",
+			"replicasDrifted", replicasDrifted, "templateDrifted", templateDrifted)
 		sts.Spec.Replicas = app.Spec.Replicas
 		sts.Spec.Template = desiredTemplate
 		if err := r.Update(ctx, &sts); err != nil {
+			logger.Error(err, "failed to correct statefulset drift")
 			return nil, false, err
 		}
 		return &sts, true, nil
 	}
 
+	logger.Info("statefulset already matches SklApp spec, nothing to do")
 	return &sts, false, nil
 }
 
