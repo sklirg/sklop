@@ -57,12 +57,12 @@ const (
 	SklappStatusReconciliationError string = "ReconciliationError"
 	SklappStatusReconciled          string = "Reconciled"
 
-	// Oauth2ProxyImage is the sidecar that authenticates requests in front
-	// of the application container when SklApp.Spec.URL is set.
-	Oauth2ProxyImage     string = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.3"
-	Oauth2ProxyContainer string = "oauth2-proxy"
-	Oauth2ProxyPortName  string = "auth-proxy-web"
-	Oauth2ProxyPort      int32  = 4180
+	// DefaultOauth2ProxyImage is used when the controller isn't started
+	// with --oauth2-proxy-image.
+	DefaultOauth2ProxyImage string = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.3"
+	Oauth2ProxyContainer    string = "oauth2-proxy"
+	Oauth2ProxyPortName     string = "auth-proxy-web"
+	Oauth2ProxyPort         int32  = 4180
 )
 
 type loggerSklapp string
@@ -81,6 +81,11 @@ type SklAppReconciler struct {
 	// itself. Set from the --gateway-name/--gateway-namespace flags.
 	DefaultGatewayName      string
 	DefaultGatewayNamespace string
+
+	// Oauth2ProxyImage is the image used for the oauth2-proxy sidecar
+	// added when a SklApp sets Spec.URL. Set from --oauth2-proxy-image;
+	// falls back to DefaultOauth2ProxyImage if left empty.
+	Oauth2ProxyImage string
 }
 
 // +kubebuilder:rbac:groups=things.sklirg.io,resources=sklapps,verbs=get;list;watch;create;update;patch;delete
@@ -336,7 +341,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 						SklappAppNameLabel: app.Name,
 					},
 				},
-				Template: podTemplate(app),
+				Template: r.podTemplate(app),
 			},
 		}
 		err := r.Create(ctx, &deploy)
@@ -364,7 +369,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	// Comparing only the projected, SklApp-managed fields (rather than the whole
 	// Template) avoids false positives from fields the API server defaults
 	// on write, such as Container.ImagePullPolicy.
-	desiredTemplate := podTemplate(app)
+	desiredTemplate := r.podTemplate(app)
 	replicasDrifted := !equality.Semantic.DeepEqual(deploy.Spec.Replicas, app.Spec.Replicas)
 	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desiredTemplate))
 	if replicasDrifted || templateDrifted {
@@ -447,7 +452,7 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 						SklappAppNameLabel: app.Name,
 					},
 				},
-				Template: podTemplate(app),
+				Template: r.podTemplate(app),
 			},
 		}
 		err := r.Create(ctx, &sts)
@@ -475,7 +480,7 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 	// Comparing only the projected, SklApp-managed fields (rather than the whole
 	// Template) avoids false positives from fields the API server defaults
 	// on write, such as Container.ImagePullPolicy.
-	desiredTemplate := podTemplate(app)
+	desiredTemplate := r.podTemplate(app)
 	replicasDrifted := !equality.Semantic.DeepEqual(sts.Spec.Replicas, app.Spec.Replicas)
 	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desiredTemplate))
 	if replicasDrifted || templateDrifted {
@@ -661,13 +666,22 @@ func oauth2ProxySecretName(app *thingsv1.SklApp) string {
 	return fmt.Sprintf("%s-oauth2-proxy-config", app.Name)
 }
 
+// oauth2ProxyImage returns r.Oauth2ProxyImage if set, otherwise
+// DefaultOauth2ProxyImage.
+func (r *SklAppReconciler) oauth2ProxyImage() string {
+	if r.Oauth2ProxyImage != "" {
+		return r.Oauth2ProxyImage
+	}
+	return DefaultOauth2ProxyImage
+}
+
 // oauth2ProxyInitContainer authenticates requests in front of the
 // application container via a native sidecar (RestartPolicy: Always),
 // created only when app.Spec.URL is set.
-func oauth2ProxyInitContainer(app *thingsv1.SklApp) corev1.Container {
+func (r *SklAppReconciler) oauth2ProxyInitContainer(app *thingsv1.SklApp) corev1.Container {
 	return corev1.Container{
 		Name:          Oauth2ProxyContainer,
-		Image:         Oauth2ProxyImage,
+		Image:         r.oauth2ProxyImage(),
 		RestartPolicy: new(corev1.ContainerRestartPolicyAlways),
 		Args: []string{
 			"--http-address=0.0.0.0:4180",
@@ -734,7 +748,7 @@ func oauth2ProxyInitContainer(app *thingsv1.SklApp) corev1.Container {
 	}
 }
 
-func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
+func (r *SklAppReconciler) podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 	containers := make([]corev1.Container, 1)
 	containers[0] = corev1.Container{
 		Name:         app.Name,
@@ -778,7 +792,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 
 	var initContainers []corev1.Container
 	if app.Spec.URL != nil {
-		initContainers = []corev1.Container{oauth2ProxyInitContainer(app)}
+		initContainers = []corev1.Container{r.oauth2ProxyInitContainer(app)}
 	}
 
 	return corev1.PodTemplateSpec{

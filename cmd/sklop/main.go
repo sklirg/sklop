@@ -65,6 +65,7 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var gatewayName, gatewayNamespace string
+	var oauth2ProxyImage string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -87,6 +88,8 @@ func main() {
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "",
 		"Namespace of the default Gateway (see --gateway-name). Leave empty for the Gateway to be looked up "+
 			"in the SklApp's own namespace.")
+	flag.StringVar(&oauth2ProxyImage, "oauth2-proxy-image", controller.DefaultOauth2ProxyImage,
+		"Image used for the oauth2-proxy sidecar added to a SklApp's pod when it sets spec.url.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -191,6 +194,7 @@ func main() {
 		Scheme:                  mgr.GetScheme(),
 		DefaultGatewayName:      gatewayName,
 		DefaultGatewayNamespace: gatewayNamespace,
+		Oauth2ProxyImage:        oauth2ProxyImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "sklapp")
 		os.Exit(1)

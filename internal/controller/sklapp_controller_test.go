@@ -406,3 +406,15 @@ var _ = Describe("oauth2ProxySecretName", func() {
 		Expect(oauth2ProxySecretName(app)).To(Equal(secretName))
 	})
 })
+
+var _ = Describe("oauth2ProxyImage", func() {
+	It("defaults to DefaultOauth2ProxyImage when unset", func() {
+		r := &SklAppReconciler{}
+		Expect(r.oauth2ProxyImage()).To(Equal(DefaultOauth2ProxyImage))
+	})
+
+	It("uses the reconciler's configured Oauth2ProxyImage when set", func() {
+		r := &SklAppReconciler{Oauth2ProxyImage: "example.com/oauth2-proxy:custom"}
+		Expect(r.oauth2ProxyImage()).To(Equal("example.com/oauth2-proxy:custom"))
+	})
+})
