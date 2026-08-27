@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -130,7 +129,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 				Name:      app.Name,
 				Namespace: app.Namespace,
 			},
-			AutomountServiceAccountToken: ptr.To(false),
+			AutomountServiceAccountToken: new(false),
 		}
 		err := r.Create(ctx, &serviceAccount)
 		if err != nil {
@@ -323,7 +322,7 @@ func ownerReference(app *thingsv1.SklApp) v1.OwnerReference {
 		Kind:       "SklApp",
 		Name:       app.Name,
 		UID:        app.UID,
-		Controller: ptr.To(true),
+		Controller: new(true),
 	}
 }
 
