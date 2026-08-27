@@ -42,6 +42,9 @@ const (
 	// SklappTakeoverLabel can be used for existing resources to connect them to a SklApp if the name doesn't match.
 	SklappTakeoverLabel string = "sklapp.things.sklirg.io/name"
 
+	SklappAppLabel     string = "app"
+	SklappAppNameLabel string = "app.kubernetes.io/name"
+
 	SklappStatusProgressing string = "Progressing"
 	SklappStatusAvailable   string = "Available"
 	SklappStatusDegraded    string = "Degraded"
@@ -245,8 +248,8 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 				Replicas: app.Spec.Replicas,
 				Selector: &v1.LabelSelector{
 					MatchLabels: map[string]string{
-						"app":                    app.Name,
-						"app.kubernetes.io/name": app.Name,
+						SklappAppLabel:     app.Name,
+						SklappAppNameLabel: app.Name,
 					},
 				},
 				Template: podTemplate(app),
@@ -330,8 +333,8 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 				Replicas: app.Spec.Replicas,
 				Selector: &v1.LabelSelector{
 					MatchLabels: map[string]string{
-						"app":                    app.Name,
-						"app.kubernetes.io/name": app.Name,
+						SklappAppLabel:     app.Name,
+						SklappAppNameLabel: app.Name,
 					},
 				},
 				Template: podTemplate(app),
@@ -384,8 +387,8 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 	return corev1.PodTemplateSpec{
 		ObjectMeta: v1.ObjectMeta{
 			Labels: map[string]string{
-				"app":                    app.Name,
-				"app.kubernetes.io/name": app.Name,
+				SklappAppLabel:     app.Name,
+				SklappAppNameLabel: app.Name,
 			},
 		},
 		Spec: corev1.PodSpec{
