@@ -153,10 +153,14 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
-	updated, err := r.reconcileApplicationType(ctx, &app)
+	updated, readyStatus, err := r.reconcileApplicationType(ctx, &app)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile application type %q: %w", *app.Spec.ApplicationType, err)
-	} else if updated {
+	}
+	if readyStatus != "" {
+		app.Status.Ready = readyStatus
+	}
+	if updated {
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
@@ -165,28 +169,54 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	return ctrl.Result{}, nil
 }
 
-func (r *SklAppReconciler) reconcileApplicationType(ctx context.Context, app *thingsv1.SklApp) (bool, error) {
+func (r *SklAppReconciler) reconcileApplicationType(ctx context.Context, app *thingsv1.SklApp) (bool, string, error) {
 	if app.Spec.ApplicationType == nil {
-		return false, fmt.Errorf("app \"%s\" does not have application type", app.Name)
+		return false, "", fmt.Errorf("app \"%s\" does not have application type", app.Name)
 	}
 
 	switch *app.Spec.ApplicationType {
 	case "Deployment":
-		_, updated, err := r.deployment(ctx, app)
+		deploy, updated, err := r.deployment(ctx, app)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return updated, nil
+		return updated, deploymentReadyStatus(deploy), nil
 	case "StatefulSet":
-		_, updated, err := r.statefulset(ctx, app)
+		sts, updated, err := r.statefulset(ctx, app)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return updated, nil
+		return updated, statefulSetReadyStatus(sts), nil
 
 	default:
-		return false, fmt.Errorf("application type \"%s\" not valid", *app.Spec.ApplicationType)
+		return false, "", fmt.Errorf("application type \"%s\" not valid", *app.Spec.ApplicationType)
 	}
+}
+
+// deploymentReadyStatus formats a Deployment's readiness as "readyReplicas/replicas".
+// deploy may be nil (e.g. right after an owner-reference backfill), in which case an
+// empty string is returned so the previous value is left as the caller's default.
+func deploymentReadyStatus(deploy *appsv1.Deployment) string {
+	if deploy == nil {
+		return ""
+	}
+	desired := int32(1)
+	if deploy.Spec.Replicas != nil {
+		desired = *deploy.Spec.Replicas
+	}
+	return fmt.Sprintf("%d/%d", deploy.Status.ReadyReplicas, desired)
+}
+
+// statefulSetReadyStatus formats a StatefulSet's readiness as "readyReplicas/replicas".
+func statefulSetReadyStatus(sts *appsv1.StatefulSet) string {
+	if sts == nil {
+		return ""
+	}
+	desired := int32(1)
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+	return fmt.Sprintf("%d/%d", sts.Status.ReadyReplicas, desired)
 }
 
 func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp) (*appsv1.Deployment, bool, error) {
