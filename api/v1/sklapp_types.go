@@ -33,7 +33,7 @@ import (
 // SklAppSpec defines the desired state of SklApp
 type SklAppSpec struct {
 	// Image to use for the application
-	// +kubebuilder:validation:Pattern="(.+/)?.+:.+"
+	// +kubebuilder:validation:Pattern="^(?:.+/)?[^:/]+(?::[^/]+|@sha256:[0-9a-f]{64})$"
 	Image string `json:"image"`
 	// ApplicationType specifies what kind of apps/v1 to use for running the app. Defaults to Deployment.
 	// +kubebuilder:default=Deployment

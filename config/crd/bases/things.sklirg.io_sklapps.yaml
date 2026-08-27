@@ -253,7 +253,7 @@ spec:
                 type: array
               image:
                 description: Image to use for the application
-                pattern: (.+/)?.+:.+
+                pattern: ^(?:.+/)?[^:/]+(?::[^/]+|@sha256:[0-9a-f]{64})$
                 type: string
               port:
                 description: Port for the application
