@@ -21,8 +21,12 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,6 +74,17 @@ var _ = Describe("SklApp Controller", func() {
 
 			By("Cleanup the specific resource instance SklApp")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			// envtest has no garbage-collector controller, so owned
+			// resources aren't reaped via OwnerReferences - delete them
+			// explicitly to keep specs isolated.
+			By("Cleanup owned resources")
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			}))).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			}))).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
@@ -84,6 +99,49 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+
+		It("should progress, create a Deployment, and become available", func() {
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling for the first time to set the Progressing condition")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			updated := &thingsv1.SklApp{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			progressingCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusProgressing)
+			Expect(progressingCondition).NotTo(BeNil())
+			Expect(meta.FindStatusCondition(updated.Status.Conditions, SklappStatusAvailable)).To(BeNil())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(HaveOccurred())
+
+			By("reconciling again to create the Deployment")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(meta.FindStatusCondition(updated.Status.Conditions, SklappStatusAvailable)).To(BeNil())
+
+			By("reconciling a third time to reach the Available condition")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			availableCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusAvailable)
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 })
