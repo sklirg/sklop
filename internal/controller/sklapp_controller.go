@@ -122,7 +122,12 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		meta.SetStatusCondition(&app.Status.Conditions, condition)
 
 		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
+			// A non-nil error must never be paired with a non-empty Result:
+			// controller-runtime ignores Result whenever error is set and
+			// requeues with backoff regardless, so keep the return value
+			// itself unambiguous rather than carrying a stale RequeueAfter.
 			reterr = errors.Join(reterr, statusErr)
+			result = ctrl.Result{}
 		}
 	}()
 
