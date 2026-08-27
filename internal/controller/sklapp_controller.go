@@ -401,7 +401,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 
 func ownerReference(app *thingsv1.SklApp) v1.OwnerReference {
 	return v1.OwnerReference{
-		APIVersion: "v1",
+		APIVersion: thingsv1.GroupVersion.String(),
 		Kind:       "SklApp",
 		Name:       app.Name,
 		UID:        app.UID,
