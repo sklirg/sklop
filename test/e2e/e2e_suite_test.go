@@ -48,6 +48,8 @@ var (
 	managerImage = fmt.Sprintf("%s/sklop:%s", e2eImageRepo, managerImageTag)
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
+	// shouldCleanupGatewayAPI tracks whether the Gateway API CRDs were installed by this suite.
+	shouldCleanupGatewayAPI = false
 )
 
 func envOrDefault(key, def string) string {
@@ -58,11 +60,12 @@ func envOrDefault(key, def string) string {
 }
 
 // TestE2E runs the e2e test suite to validate the solution in an isolated environment.
-// The default setup requires Kind and CertManager.
+// The default setup requires Kind, CertManager, and the Gateway API CRDs.
 //
 // To enable kubectl kuberc (use custom kubectl configurations), set: KUBECTL_KUBERC=true
 // By default, kuberc is disabled to ensure consistent test behavior across different environments.
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
+// To skip Gateway API CRD installation, set: GATEWAY_API_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting sklop e2e test suite\n")
@@ -96,10 +99,12 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+	setupGatewayAPI()
 })
 
 var _ = AfterSuite(func() {
 	teardownCertManager()
+	teardownGatewayAPI()
 })
 
 // Disable kubectl kuberc by default for test isolation.
@@ -148,4 +153,37 @@ func teardownCertManager() {
 
 	By("uninstalling CertManager")
 	utils.UninstallCertManager()
+}
+
+// setupGatewayAPI installs the Gateway API CRDs if needed. The manager
+// watches HTTPRoute (Owns), so it fails to start without this CRD present -
+// regardless of whether any test actually creates an HTTPRoute.
+// Skips installation if GATEWAY_API_INSTALL_SKIP=true or if already present.
+func setupGatewayAPI() {
+	if os.Getenv("GATEWAY_API_INSTALL_SKIP") == "true" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping Gateway API installation (GATEWAY_API_INSTALL_SKIP=true)\n")
+		return
+	}
+
+	By("checking if the Gateway API CRDs are already installed")
+	if utils.IsGatewayAPICRDsInstalled() {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Gateway API CRDs are already installed. Skipping installation.\n")
+		return
+	}
+
+	shouldCleanupGatewayAPI = true
+
+	By("installing the Gateway API CRDs")
+	Expect(utils.InstallGatewayAPI()).To(Succeed(), "Failed to install the Gateway API CRDs")
+}
+
+// teardownGatewayAPI uninstalls the Gateway API CRDs if they were installed by setupGatewayAPI.
+func teardownGatewayAPI() {
+	if !shouldCleanupGatewayAPI {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping Gateway API cleanup (not installed by this suite)\n")
+		return
+	}
+
+	By("uninstalling the Gateway API CRDs")
+	utils.UninstallGatewayAPI()
 }

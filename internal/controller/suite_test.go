@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	thingsv1 "github.com/sklirg/sklop/api/v1"
 	// +kubebuilder:scaffold:imports
@@ -60,14 +63,27 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
+	err = gatewayv1.Install(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
 	err = thingsv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
+	crdPaths := []string{filepath.Join("..", "..", "config", "crd", "bases")}
+	// The Gateway API CRDs are a cluster prerequisite in production (like
+	// cert-manager - see test/e2e), not something this operator installs
+	// itself, but envtest needs the HTTPRoute CRD present to accept
+	// HTTPRoute objects at all. Rather than vendoring a copy of it in this
+	// repo, read it straight out of the already-downloaded Go module cache.
+	if dir, err := gatewayAPIModuleDir(); err == nil {
+		crdPaths = append(crdPaths, filepath.Join(dir, "config", "crd", "standard"))
+	} else {
+		logf.Log.Error(err, "could not locate the sigs.k8s.io/gateway-api module directory; HTTPRoute tests will fail")
+	}
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     crdPaths,
 		ErrorIfCRDPathMissing: true,
 	}
 
@@ -115,4 +131,16 @@ func getFirstFoundEnvTestBinaryDir() string {
 		}
 	}
 	return ""
+}
+
+// gatewayAPIModuleDir resolves the local directory Go already downloaded the
+// sigs.k8s.io/gateway-api module into (a `go build`/`go test` of this module
+// requires it, so it's always present by the time this runs), avoiding the
+// need to vendor a copy of its CRD YAML in this repo just for envtest.
+func gatewayAPIModuleDir() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "sigs.k8s.io/gateway-api").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

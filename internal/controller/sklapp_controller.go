@@ -27,14 +27,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	thingsv1 "github.com/sklirg/sklop/api/v1"
 )
@@ -53,6 +56,13 @@ const (
 	SklappStatusReconciling         string = "Reconciling"
 	SklappStatusReconciliationError string = "ReconciliationError"
 	SklappStatusReconciled          string = "Reconciled"
+
+	// Oauth2ProxyImage is the sidecar that authenticates requests in front
+	// of the application container when SklApp.Spec.URL is set.
+	Oauth2ProxyImage     string = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.3"
+	Oauth2ProxyContainer string = "oauth2-proxy"
+	Oauth2ProxyPortName  string = "auth-proxy-web"
+	Oauth2ProxyPort      int32  = 4180
 )
 
 type loggerSklapp string
@@ -65,6 +75,12 @@ const (
 type SklAppReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// DefaultGatewayName and DefaultGatewayNamespace identify the Gateway
+	// an HTTPRoute attaches to when a SklApp doesn't set Spec.Gateway
+	// itself. Set from the --gateway-name/--gateway-namespace flags.
+	DefaultGatewayName      string
+	DefaultGatewayNamespace string
 }
 
 // +kubebuilder:rbac:groups=things.sklirg.io,resources=sklapps,verbs=get;list;watch;create;update;patch;delete
@@ -72,6 +88,7 @@ type SklAppReconciler struct {
 // +kubebuilder:rbac:groups=things.sklirg.io,resources=sklapps/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -179,6 +196,24 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	if updated {
 		logger.Info("application type reconciliation made changes, requeueing", "applicationType", *app.Spec.ApplicationType)
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+	}
+
+	if app.Spec.URL != nil {
+		logger.Info("URL is set, reconciling Service and HTTPRoute")
+		_, svcUpdated, err := r.service(ctx, &app)
+		if err != nil {
+			logger.Error(err, "failed to reconcile service")
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile service: %w", err)
+		}
+		routeUpdated, err := r.httpRoute(ctx, &app)
+		if err != nil {
+			logger.Error(err, "failed to reconcile httproute")
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile httproute: %w", err)
+		}
+		if svcUpdated || routeUpdated {
+			logger.Info("ingress reconciliation made changes, requeueing", "serviceUpdated", svcUpdated, "httpRouteUpdated", routeUpdated)
+			return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
+		}
 	}
 
 	logger.Info("reconcile complete, nothing left to do", "ready", readyStatus)
@@ -459,6 +494,246 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 	return &sts, false, nil
 }
 
+// service ensures a Service exists routing to the oauth2-proxy sidecar,
+// created only when app.Spec.URL is set. Like deployment/statefulset it
+// creates the Service if missing and backfills the owner reference if an
+// adopted Service lacks one, but - unlike deployment/statefulset - it does
+// not yet reconcile drift on the Service's own spec (ports/selector).
+func (r *SklAppReconciler) service(ctx context.Context, app *thingsv1.SklApp) (*corev1.Service, bool, error) {
+	logger := logf.FromContext(ctx)
+
+	var svc corev1.Service
+	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &svc)
+	if err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to get service")
+		return nil, false, err
+	}
+	if err != nil {
+		logger.Info("no service found, creating it")
+		svc = corev1.Service{
+			ObjectMeta: v1.ObjectMeta{
+				Name:            app.Name,
+				Namespace:       app.Namespace,
+				OwnerReferences: []v1.OwnerReference{ownerReference(app)},
+			},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{
+					SklappAppLabel:     app.Name,
+					SklappAppNameLabel: app.Name,
+				},
+				Ports: []corev1.ServicePort{
+					{
+						Name:       Oauth2ProxyPortName,
+						Port:       Oauth2ProxyPort,
+						TargetPort: intstr.FromInt32(Oauth2ProxyPort),
+						Protocol:   corev1.ProtocolTCP,
+					},
+				},
+			},
+		}
+		if err := r.Create(ctx, &svc); err != nil {
+			logger.Error(err, "failed to create service")
+			return nil, false, err
+		}
+		logger.Info("created service, requeueing")
+		return &svc, true, nil
+	}
+
+	if !hasOwnerReference(&svc, app) {
+		logger.Info("service missing owner reference, backfilling it and requeueing")
+		svc.OwnerReferences = append(svc.OwnerReferences, ownerReference(app))
+		if err := r.Update(ctx, &svc); err != nil {
+			logger.Error(err, "failed to update service owner reference")
+			return nil, false, err
+		}
+		return nil, true, nil
+	}
+
+	logger.Info("service already exists, nothing to do")
+	return &svc, false, nil
+}
+
+// gatewayParentRef resolves the Gateway an HTTPRoute should attach to: the
+// SklApp's own Spec.Gateway if set, otherwise the controller-wide default
+// from --gateway-name/--gateway-namespace. An omitted Namespace (on either
+// source) means "the Gateway lives in the HTTPRoute's own namespace", per
+// Gateway API's own ParentReference semantics.
+func (r *SklAppReconciler) gatewayParentRef(app *thingsv1.SklApp) (gatewayv1.ParentReference, error) {
+	name := r.DefaultGatewayName
+	namespace := r.DefaultGatewayNamespace
+	if app.Spec.Gateway != nil {
+		name = app.Spec.Gateway.Name
+		namespace = ""
+		if app.Spec.Gateway.Namespace != nil {
+			namespace = *app.Spec.Gateway.Namespace
+		}
+	}
+
+	if name == "" {
+		return gatewayv1.ParentReference{}, fmt.Errorf(
+			"no Gateway configured for SklApp %q: set spec.gateway, or start the controller with --gateway-name (and optionally --gateway-namespace)",
+			app.Name)
+	}
+
+	ref := gatewayv1.ParentReference{Name: gatewayv1.ObjectName(name)}
+	if namespace != "" {
+		ns := gatewayv1.Namespace(namespace)
+		ref.Namespace = &ns
+	}
+	return ref, nil
+}
+
+// httpRoute ensures an HTTPRoute exists routing app.Spec.URL to the Service,
+// created only when app.Spec.URL is set. As with service, it creates and
+// adopts but does not yet reconcile drift on the route's own spec.
+func (r *SklAppReconciler) httpRoute(ctx context.Context, app *thingsv1.SklApp) (bool, error) {
+	logger := logf.FromContext(ctx)
+
+	parentRef, err := r.gatewayParentRef(app)
+	if err != nil {
+		logger.Error(err, "failed to resolve httproute gateway")
+		return false, err
+	}
+
+	var route gatewayv1.HTTPRoute
+	err = r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &route)
+	if err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "failed to get httproute")
+		return false, err
+	}
+	if err != nil {
+		logger.Info("no httproute found, creating it")
+		route = gatewayv1.HTTPRoute{
+			ObjectMeta: v1.ObjectMeta{
+				Name:            app.Name,
+				Namespace:       app.Namespace,
+				OwnerReferences: []v1.OwnerReference{ownerReference(app)},
+			},
+			Spec: gatewayv1.HTTPRouteSpec{
+				CommonRouteSpec: gatewayv1.CommonRouteSpec{
+					ParentRefs: []gatewayv1.ParentReference{parentRef},
+				},
+				Hostnames: []gatewayv1.Hostname{gatewayv1.Hostname(*app.Spec.URL)},
+				Rules: []gatewayv1.HTTPRouteRule{
+					{
+						BackendRefs: []gatewayv1.HTTPBackendRef{
+							{
+								BackendRef: gatewayv1.BackendRef{
+									BackendObjectReference: gatewayv1.BackendObjectReference{
+										Name: gatewayv1.ObjectName(app.Name),
+										Port: new(Oauth2ProxyPort),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		if err := r.Create(ctx, &route); err != nil {
+			logger.Error(err, "failed to create httproute")
+			return false, err
+		}
+		logger.Info("created httproute, requeueing")
+		return true, nil
+	}
+
+	if !hasOwnerReference(&route, app) {
+		logger.Info("httproute missing owner reference, backfilling it and requeueing")
+		route.OwnerReferences = append(route.OwnerReferences, ownerReference(app))
+		if err := r.Update(ctx, &route); err != nil {
+			logger.Error(err, "failed to update httproute owner reference")
+			return false, err
+		}
+		return true, nil
+	}
+
+	logger.Info("httproute already exists, nothing to do")
+	return false, nil
+}
+
+// oauth2ProxySecretName returns app.Spec.OAuth2ProxySecretName if set,
+// otherwise the default "<name>-oauth2-proxy-config".
+func oauth2ProxySecretName(app *thingsv1.SklApp) string {
+	if app.Spec.OAuth2ProxySecretName != nil {
+		return *app.Spec.OAuth2ProxySecretName
+	}
+	return fmt.Sprintf("%s-oauth2-proxy-config", app.Name)
+}
+
+// oauth2ProxyInitContainer authenticates requests in front of the
+// application container via a native sidecar (RestartPolicy: Always),
+// created only when app.Spec.URL is set.
+func oauth2ProxyInitContainer(app *thingsv1.SklApp) corev1.Container {
+	return corev1.Container{
+		Name:          Oauth2ProxyContainer,
+		Image:         Oauth2ProxyImage,
+		RestartPolicy: new(corev1.ContainerRestartPolicyAlways),
+		Args: []string{
+			"--http-address=0.0.0.0:4180",
+			"--reverse-proxy=true",
+			"--real-client-ip-header=X-Forwarded-For",
+			fmt.Sprintf("--upstream=http://localhost:%d", app.Spec.Port),
+			"--provider=keycloak-oidc",
+			"--provider-display-name=letmein",
+			"--code-challenge-method=S256", // PKCE
+		},
+		EnvFrom: []corev1.EnvFromSource{
+			{
+				// TODO: unless OAuth2ProxySecretName points at an existing
+				// Secret, this defaults to a name that doesn't exist yet -
+				// there's no mechanism for provisioning oauth2-proxy's OIDC
+				// client credentials per-app. Needs to be created/managed
+				// some other way before this sidecar can actually start.
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: oauth2ProxySecretName(app),
+					},
+				},
+			},
+		},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          Oauth2ProxyPortName,
+				ContainerPort: Oauth2ProxyPort,
+				Protocol:      corev1.ProtocolTCP,
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("25Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("50Mi"),
+			},
+		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path:   "/ready",
+					Port:   intstr.FromInt32(Oauth2ProxyPort),
+					Scheme: corev1.URISchemeHTTP,
+				},
+			},
+			FailureThreshold: 3,
+			PeriodSeconds:    1,
+			SuccessThreshold: 1,
+			TimeoutSeconds:   1,
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: new(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			RunAsNonRoot: new(true),
+			SeccompProfile: &corev1.SeccompProfile{
+				Type: corev1.SeccompProfileTypeRuntimeDefault,
+			},
+		},
+	}
+}
+
 func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 	containers := make([]corev1.Container, 1)
 	containers[0] = corev1.Container{
@@ -501,6 +776,11 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		},
 	}
 
+	var initContainers []corev1.Container
+	if app.Spec.URL != nil {
+		initContainers = []corev1.Container{oauth2ProxyInitContainer(app)}
+	}
+
 	return corev1.PodTemplateSpec{
 		ObjectMeta: v1.ObjectMeta{
 			Labels: map[string]string{
@@ -510,6 +790,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: app.Name,
+			InitContainers:     initContainers,
 			Containers:         containers,
 			Volumes:            normalizeVolumeDefaults(app.Spec.Volumes),
 			SecurityContext:    podSecurityContext,
@@ -553,6 +834,7 @@ type managedPodSpec struct {
 	Labels             map[string]string
 	ServiceAccountName string
 	Volumes            []corev1.Volume
+	InitContainers     []managedContainerSpec
 	Image              string
 	Resources          corev1.ResourceRequirements
 	Env                []corev1.EnvVar
@@ -563,15 +845,46 @@ type managedPodSpec struct {
 	SecurityContext    *corev1.SecurityContext
 }
 
+// managedContainerSpec is the analogous per-container projection, used for
+// InitContainers (currently just the oauth2-proxy sidecar).
+type managedContainerSpec struct {
+	Name            string
+	Image           string
+	Args            []string
+	EnvFrom         []corev1.EnvFromSource
+	Ports           []corev1.ContainerPort
+	Resources       corev1.ResourceRequirements
+	SecurityContext *corev1.SecurityContext
+	RestartPolicy   *corev1.ContainerRestartPolicy
+}
+
+func projectContainer(c corev1.Container) managedContainerSpec {
+	return managedContainerSpec{
+		Name:            c.Name,
+		Image:           c.Image,
+		Args:            c.Args,
+		EnvFrom:         c.EnvFrom,
+		Ports:           c.Ports,
+		Resources:       c.Resources,
+		SecurityContext: c.SecurityContext,
+		RestartPolicy:   c.RestartPolicy,
+	}
+}
+
 func projectPodTemplate(tmpl corev1.PodTemplateSpec) managedPodSpec {
 	var container corev1.Container
 	if len(tmpl.Spec.Containers) > 0 {
 		container = tmpl.Spec.Containers[0]
 	}
+	initContainers := make([]managedContainerSpec, len(tmpl.Spec.InitContainers))
+	for i, c := range tmpl.Spec.InitContainers {
+		initContainers[i] = projectContainer(c)
+	}
 	return managedPodSpec{
 		Labels:             tmpl.Labels,
 		ServiceAccountName: tmpl.Spec.ServiceAccountName,
 		Volumes:            tmpl.Spec.Volumes,
+		InitContainers:     initContainers,
 		Image:              container.Image,
 		Resources:          container.Resources,
 		Env:                container.Env,
@@ -611,5 +924,6 @@ func (r *SklAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
+		Owns(&gatewayv1.HTTPRoute{}).
 		Complete(r)
 }

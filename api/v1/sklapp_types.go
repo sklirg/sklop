@@ -68,9 +68,31 @@ type SklAppSpec struct {
 	// RunAsUser is set here to a non-root UID the image supports.
 	// +kubebuilder:validation:Optional
 	RunAsUser *int64 `json:"runAsUser"`
-	// URL to the application to expose it to the world (hello world!)
+	// URL exposes the application to the world. When set, a Service and an
+	// HTTPRoute are created routing traffic for this hostname to the app,
+	// fronted by an oauth2-proxy sidecar that authenticates requests before
+	// they reach the application container.
 	// +kubebuilder:validation:Optional
-	// URL *string `json:"url"`
+	URL *string `json:"url"`
+	// Gateway identifies the Gateway the HTTPRoute (created when URL is set)
+	// should attach to. If unset, the controller's configured default
+	// Gateway (--gateway-name/--gateway-namespace flags) is used instead.
+	// +kubebuilder:validation:Optional
+	Gateway *GatewayReference `json:"gateway"`
+	// OAuth2ProxySecretName names the Secret providing the oauth2-proxy
+	// sidecar's envFrom (OIDC client credentials, cookie secret, etc.),
+	// only used when URL is set. Defaults to "<name>-oauth2-proxy-config".
+	// +kubebuilder:validation:Optional
+	OAuth2ProxySecretName *string `json:"oauth2ProxySecretName"`
+}
+
+// GatewayReference identifies a Gateway API Gateway resource.
+type GatewayReference struct {
+	// Name of the Gateway.
+	Name string `json:"name"`
+	// Namespace of the Gateway. Defaults to the SklApp's own namespace.
+	// +kubebuilder:validation:Optional
+	Namespace *string `json:"namespace"`
 }
 
 // SklAppStatus defines the observed state of SklApp.
@@ -102,6 +124,7 @@ type SklAppStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.ready"
+// +kubebuilder:printcolumn:name="URL",type="string",JSONPath=".spec.url"
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 

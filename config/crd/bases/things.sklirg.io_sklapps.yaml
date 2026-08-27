@@ -18,6 +18,9 @@ spec:
     - jsonPath: .status.ready
       name: Ready
       type: string
+    - jsonPath: .spec.url
+      name: URL
+      type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Status
       type: string
@@ -261,9 +264,31 @@ spec:
                       x-kubernetes-map-type: atomic
                   type: object
                 type: array
+              gateway:
+                description: |-
+                  Gateway identifies the Gateway the HTTPRoute (created when URL is set)
+                  should attach to. If unset, the controller's configured default
+                  Gateway (--gateway-name/--gateway-namespace flags) is used instead.
+                properties:
+                  name:
+                    description: Name of the Gateway.
+                    type: string
+                  namespace:
+                    description: Namespace of the Gateway. Defaults to the SklApp's
+                      own namespace.
+                    type: string
+                required:
+                - name
+                type: object
               image:
                 description: Image to use for the application
                 pattern: ^(?:.+/)?[^:/]+(?::[^/]+|@sha256:[0-9a-f]{64})$
+                type: string
+              oauth2ProxySecretName:
+                description: |-
+                  OAuth2ProxySecretName names the Secret providing the oauth2-proxy
+                  sidecar's envFrom (OIDC client credentials, cookie secret, etc.),
+                  only used when URL is set. Defaults to "<name>-oauth2-proxy-config".
                 type: string
               port:
                 description: Port for the application
@@ -342,6 +367,13 @@ spec:
                   RunAsUser is set here to a non-root UID the image supports.
                 format: int64
                 type: integer
+              url:
+                description: |-
+                  URL exposes the application to the world. When set, a Service and an
+                  HTTPRoute are created routing traffic for this hostname to the app,
+                  fronted by an oauth2-proxy sidecar that authenticates requests before
+                  they reach the application container.
+                type: string
               volumeMounts:
                 description: VolumeMounts to mount into the application container
                 items:

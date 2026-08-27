@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -342,5 +343,66 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(readyCondition).NotTo(BeNil())
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
+	})
+})
+
+var _ = Describe("gatewayParentRef", func() {
+	const defaultGatewayName = "default-gw"
+	const defaultGatewayNamespace = "gw-ns"
+
+	app := func(gateway *thingsv1.GatewayReference) *thingsv1.SklApp {
+		return &thingsv1.SklApp{
+			ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "app-ns"},
+			Spec:       thingsv1.SklAppSpec{Gateway: gateway},
+		}
+	}
+	reconcilerWithDefault := func() *SklAppReconciler {
+		return &SklAppReconciler{DefaultGatewayName: defaultGatewayName, DefaultGatewayNamespace: defaultGatewayNamespace}
+	}
+
+	It("errors when neither spec.gateway nor a controller default is configured", func() {
+		r := &SklAppReconciler{}
+		_, err := r.gatewayParentRef(app(nil))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("falls back to the controller-wide default when spec.gateway is unset", func() {
+		ref, err := reconcilerWithDefault().gatewayParentRef(app(nil))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.Name).To(Equal(gatewayv1.ObjectName(defaultGatewayName)))
+		Expect(ref.Namespace).NotTo(BeNil())
+		Expect(*ref.Namespace).To(Equal(gatewayv1.Namespace(defaultGatewayNamespace)))
+	})
+
+	It("prefers spec.gateway over the controller-wide default", func() {
+		ns := "own-ns"
+		ref, err := reconcilerWithDefault().gatewayParentRef(app(&thingsv1.GatewayReference{Name: "own-gw", Namespace: &ns}))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.Name).To(Equal(gatewayv1.ObjectName("own-gw")))
+		Expect(ref.Namespace).NotTo(BeNil())
+		Expect(*ref.Namespace).To(Equal(gatewayv1.Namespace("own-ns")))
+	})
+
+	It("omits Namespace when spec.gateway sets a name but no namespace, meaning same-namespace", func() {
+		ref, err := reconcilerWithDefault().gatewayParentRef(app(&thingsv1.GatewayReference{Name: "own-gw"}))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.Name).To(Equal(gatewayv1.ObjectName("own-gw")))
+		Expect(ref.Namespace).To(BeNil())
+	})
+})
+
+var _ = Describe("oauth2ProxySecretName", func() {
+	It("defaults to <name>-oauth2-proxy-config when unset", func() {
+		app := &thingsv1.SklApp{ObjectMeta: metav1.ObjectMeta{Name: "grafana"}}
+		Expect(oauth2ProxySecretName(app)).To(Equal("grafana-oauth2-proxy-config"))
+	})
+
+	It("uses OAuth2ProxySecretName when set", func() {
+		secretName := "shared-oauth2-proxy-secret"
+		app := &thingsv1.SklApp{
+			ObjectMeta: metav1.ObjectMeta{Name: "grafana"},
+			Spec:       thingsv1.SklAppSpec{OAuth2ProxySecretName: &secretName},
+		}
+		Expect(oauth2ProxySecretName(app)).To(Equal(secretName))
 	})
 })

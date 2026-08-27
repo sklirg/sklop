@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	thingsv1 "github.com/sklirg/sklop/api/v1"
 	"github.com/sklirg/sklop/internal/controller"
@@ -48,6 +49,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(thingsv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -62,6 +64,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	var gatewayName, gatewayNamespace string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -79,6 +82,11 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.StringVar(&gatewayName, "gateway-name", "",
+		"Name of the default Gateway that a SklApp's HTTPRoute attaches to when it doesn't set spec.gateway itself.")
+	flag.StringVar(&gatewayNamespace, "gateway-namespace", "",
+		"Namespace of the default Gateway (see --gateway-name). Leave empty for the Gateway to be looked up "+
+			"in the SklApp's own namespace.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -179,8 +187,10 @@ func main() {
 	}
 
 	if err := (&controller.SklAppReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		DefaultGatewayName:      gatewayName,
+		DefaultGatewayNamespace: gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "sklapp")
 		os.Exit(1)

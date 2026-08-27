@@ -31,6 +31,8 @@ const (
 	certmanagerVersion = "v1.20.2"
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
 
+	gatewayAPIURLTmpl = "https://github.com/kubernetes-sigs/gateway-api/releases/download/%s/standard-install.yaml"
+
 	defaultKindBinary  = "kind"
 	defaultKindCluster = "kind"
 )
@@ -127,6 +129,62 @@ func IsCertManagerCRDsInstalled() bool {
 			if strings.Contains(line, crd) {
 				return true
 			}
+		}
+	}
+
+	return false
+}
+
+// gatewayAPIVersion resolves the sigs.k8s.io/gateway-api version this module
+// actually depends on (from go.mod, via the Go toolchain), rather than
+// hand-tracking a separate version string here that could silently drift
+// out of sync (e.g. after a Renovate bump to go.mod).
+func gatewayAPIVersion() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Version}}", "sigs.k8s.io/gateway-api").Output()
+	if err != nil {
+		return "", fmt.Errorf("resolving sigs.k8s.io/gateway-api version: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// UninstallGatewayAPI uninstalls the Gateway API CRDs.
+func UninstallGatewayAPI() {
+	version, err := gatewayAPIVersion()
+	if err != nil {
+		warnError(err)
+		return
+	}
+	cmd := exec.Command("kubectl", "delete", "-f", fmt.Sprintf(gatewayAPIURLTmpl, version))
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
+}
+
+// InstallGatewayAPI installs the Gateway API CRDs (standard channel), which
+// SklApp's HTTPRoute reconciliation and the manager's watch on HTTPRoute
+// (Owns) both require to be present in the cluster.
+func InstallGatewayAPI() error {
+	version, err := gatewayAPIVersion()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("kubectl", "apply", "-f", fmt.Sprintf(gatewayAPIURLTmpl, version))
+	_, err = Run(cmd)
+	return err
+}
+
+// IsGatewayAPICRDsInstalled checks if the Gateway API CRDs are installed by
+// verifying the existence of the HTTPRoute CRD.
+func IsGatewayAPICRDsInstalled() bool {
+	cmd := exec.Command("kubectl", "get", "crds")
+	output, err := Run(cmd)
+	if err != nil {
+		return false
+	}
+
+	for _, line := range GetNonEmptyLines(output) {
+		if strings.Contains(line, "httproutes.gateway.networking.k8s.io") {
+			return true
 		}
 	}
 
