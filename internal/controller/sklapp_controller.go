@@ -201,14 +201,17 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	// if no found, look for apps via labels => if found, set ownerreference
 	// if still no found, create it
 
-	var deploy *appsv1.Deployment
-	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, deploy)
+	var deploy appsv1.Deployment
+	found := true
+	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &deploy)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, false, err
+	} else if err != nil {
+		found = false
 	}
 
 	// Look for the deployment via labels instead
-	if deploy == nil {
+	if !found {
 		req, err := labels.NewRequirement(SklappTakeoverLabel, selection.Equals, []string{app.Name})
 		if err != nil {
 			return nil, false, err
@@ -227,13 +230,14 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 			return nil, false, fmt.Errorf("found more than 1 deployment labelled with this app")
 		}
 		if len(deploymentlist.Items) == 1 {
-			deploy = &deploymentlist.Items[0]
+			deploy = deploymentlist.Items[0]
+			found = true
 		}
 	}
 
 	// If still no deployment, create it
-	if deploy == nil {
-		deploy = &appsv1.Deployment{
+	if !found {
+		deploy = appsv1.Deployment{
 			ObjectMeta: v1.ObjectMeta{
 				Name:            app.Name,
 				Namespace:       app.Namespace,
@@ -250,11 +254,11 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 				Template: podTemplate(app),
 			},
 		}
-		err := r.Create(ctx, deploy)
+		err := r.Create(ctx, &deploy)
 		if err != nil {
 			return nil, false, err
 		}
-		return deploy, true, nil
+		return &deploy, true, nil
 	}
 
 	hasOwnerRef := false
@@ -267,14 +271,14 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	}
 	if !hasOwnerRef {
 		deploy.OwnerReferences = append(deploy.OwnerReferences, ownerReference(app))
-		err := r.Update(ctx, deploy)
+		err := r.Update(ctx, &deploy)
 		if err != nil {
 			return nil, false, err
 		}
 		return nil, true, nil
 	}
 
-	return deploy, false, nil
+	return &deploy, false, nil
 }
 
 func (r *SklAppReconciler) statefulset(ctx context.Context) (*appsv1.StatefulSet, error) {
