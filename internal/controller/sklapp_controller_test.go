@@ -54,6 +54,9 @@ var _ = Describe("SklApp Controller", func() {
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
+					Spec: thingsv1.SklAppSpec{
+						Image: "nginx:latest",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

@@ -18,12 +18,14 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +42,13 @@ import (
 const (
 	// SklappTakeoverLabel can be used for existing resources to connect them to a SklApp if the name doesn't match.
 	SklappTakeoverLabel string = "sklapp.things.sklirg.io/name"
+
+	SklappStatusProgressing string = "Progressing"
+	SklappStatusAvailable   string = "Available"
+	SklappStatusDegraded    string = "Degraded"
+
+	SklappStatusReconciling         string = "Reconciling"
+	SklappStatusReconciliationError string = "ReconciliationError"
 )
 
 type loggerSklapp string
@@ -64,7 +73,7 @@ type SklAppReconciler struct {
 // move the current state of the cluster closer to the desired state.
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
-func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reterr error) {
 	logger := logf.FromContext(ctx)
 
 	// - Ignore deleted app and requeue other errors
@@ -73,9 +82,9 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	var app thingsv1.SklApp
 	err := r.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Name}, &app)
-	if err != nil && errors.IsNotFound(err) {
+	if err != nil && apierrors.IsNotFound(err) {
 		return ctrl.Result{}, nil
-	} else if err != nil && !errors.IsNotFound(err) {
+	} else if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
 
@@ -84,10 +93,38 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("reconciling")
 
+	// Update status when exiting
+	defer func() {
+		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
+			reterr = errors.Join(reterr, statusErr)
+		}
+	}()
+
+	if len(app.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
+			Type:    SklappStatusProgressing,
+			Status:  v1.ConditionUnknown,
+			Reason:  SklappStatusReconciling,
+			Message: "Reconciling",
+		})
+	} else {
+		for _, condition := range app.Status.Conditions {
+			if condition.Type == SklappStatusDegraded {
+				meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
+					Type:    SklappStatusProgressing,
+					Status:  v1.ConditionUnknown,
+					Reason:  SklappStatusReconciling,
+					Message: "Reconciling",
+				})
+				break
+			}
+		}
+	}
+
 	// Ensure SA exists
 	var serviceAccount corev1.ServiceAccount
 	err = r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &serviceAccount)
-	if err != nil && errors.IsNotFound(err) {
+	if err != nil && apierrors.IsNotFound(err) {
 		serviceAccount = corev1.ServiceAccount{
 			ObjectMeta: v1.ObjectMeta{
 				Name:      app.Name,
@@ -100,16 +137,36 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
-	} else if err != nil && !errors.IsNotFound(err) {
+	} else if err != nil && !apierrors.IsNotFound(err) {
+		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
+			Type:    SklappStatusDegraded,
+			Status:  v1.ConditionTrue,
+			Reason:  SklappStatusReconciliationError,
+			Message: fmt.Sprintf("Failed to get ServiceAccount: %s", err),
+		})
 		return ctrl.Result{}, err
 	}
 
 	updated, err := r.reconcileApplicationType(ctx, &app)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to reconcile application type: %w", err)
+		errmsg := fmt.Sprintf("failed to reconcile application type \"%s\": %s", *app.Spec.ApplicationType, err)
+		meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
+			Type:    SklappStatusDegraded,
+			Status:  v1.ConditionTrue,
+			Reason:  SklappStatusReconciliationError,
+			Message: errmsg,
+		})
+		return ctrl.Result{}, errors.New(errmsg)
 	} else if updated {
 		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
+
+	meta.SetStatusCondition(&app.Status.Conditions, v1.Condition{
+		Type:    SklappStatusAvailable,
+		Status:  v1.ConditionTrue,
+		Reason:  "Reconciled",
+		Message: "Reconciled",
+	})
 
 	return ctrl.Result{}, nil
 }
@@ -146,7 +203,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 
 	var deploy *appsv1.Deployment
 	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, deploy)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, false, err
 	}
 
@@ -163,7 +220,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 				Selector: selector,
 			},
 		})
-		if err != nil && !errors.IsNotFound(err) {
+		if err != nil && !apierrors.IsNotFound(err) {
 			return nil, false, err
 		}
 		if len(deploymentlist.Items) > 1 {

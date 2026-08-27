@@ -33,6 +33,7 @@ import (
 // SklAppSpec defines the desired state of SklApp
 type SklAppSpec struct {
 	// Image to use for the application
+	// +kubebuilder:validation:Pattern="(.+/)?.+:.+"
 	Image string `json:"image"`
 	// ApplicationType specifies what kind of apps/v1 to use for running the app. Defaults to Deployment.
 	// +kubebuilder:default=Deployment
@@ -46,6 +47,7 @@ type SklAppSpec struct {
 	// Resources for the application
 	Resources corev1.ResourceRequirements `json:"resources"`
 	// Port for the application
+	// +kubebuilder:validation:Optional
 	Port int32 `json:"port"`
 	// Env variables to pass to the application container
 	// +kubebuilder:validation:Optional
