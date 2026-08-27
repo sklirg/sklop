@@ -1,8 +1,11 @@
 # sklop
-// TODO(user): Add simple overview of use/purpose
+
+Operator for my homelab k8s clusters.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+
+Simplifies creating deployments/statefulsets by creating the workloads, serviceaccounts, HTTPRoutes and updating Gateways
+for certificate creation.
 
 ## Getting Started
 
