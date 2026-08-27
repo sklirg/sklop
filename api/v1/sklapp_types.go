@@ -55,6 +55,12 @@ type SklAppSpec struct {
 	// EnvFrom to pass to the application container
 	// +kubebuilder:validation:Optional
 	EnvFrom []corev1.EnvFromSource `json:"envfrom"`
+	// Volumes to make available to the pod
+	// +kubebuilder:validation:Optional
+	Volumes []corev1.Volume `json:"volumes"`
+	// VolumeMounts to mount into the application container
+	// +kubebuilder:validation:Optional
+	VolumeMounts []corev1.VolumeMount `json:"volumeMounts"`
 }
 
 // SklAppStatus defines the observed state of SklApp.

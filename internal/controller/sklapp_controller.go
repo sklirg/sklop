@@ -376,11 +376,12 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 	containers := make([]corev1.Container, 1)
 	containers[0] = corev1.Container{
-		Name:      app.Name,
-		Image:     app.Spec.Image,
-		Resources: app.Spec.Resources,
-		Env:       app.Spec.Env,
-		EnvFrom:   app.Spec.EnvFrom,
+		Name:         app.Name,
+		Image:        app.Spec.Image,
+		Resources:    app.Spec.Resources,
+		Env:          app.Spec.Env,
+		EnvFrom:      app.Spec.EnvFrom,
+		VolumeMounts: app.Spec.VolumeMounts,
 	}
 	if app.Spec.Port != 0 {
 		containers[0].Ports = []corev1.ContainerPort{
@@ -400,6 +401,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		Spec: corev1.PodSpec{
 			ServiceAccountName: app.Name,
 			Containers:         containers,
+			Volumes:            app.Spec.Volumes,
 		},
 	}
 }
