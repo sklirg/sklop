@@ -61,6 +61,13 @@ type SklAppSpec struct {
 	// VolumeMounts to mount into the application container
 	// +kubebuilder:validation:Optional
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts"`
+	// RunAsUser overrides the pod's securityContext.runAsUser. The pod
+	// always runs with securityContext.runAsNonRoot=true; images whose
+	// default user is already non-root need no further configuration, but
+	// images that default to root (uid 0) will fail to start unless
+	// RunAsUser is set here to a non-root UID the image supports.
+	// +kubebuilder:validation:Optional
+	RunAsUser *int64 `json:"runAsUser"`
 }
 
 // SklAppStatus defines the observed state of SklApp.

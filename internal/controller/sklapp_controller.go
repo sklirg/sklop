@@ -439,6 +439,20 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 			},
 		}
 	}
+	// RunAsNonRoot is always enforced: images with their own non-root
+	// default user (a Dockerfile USER directive, etc.) run fine as-is.
+	// Only an image whose default user is root (uid 0) will fail to start
+	// under this policy ("container has runAsNonRoot and image will run
+	// as root") - RunAsUser is the escape hatch for that case, overriding
+	// the user to a non-root UID the image supports.
+	podSecurityContext := &corev1.PodSecurityContext{
+		RunAsNonRoot: new(true),
+		RunAsUser:    app.Spec.RunAsUser,
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+
 	return corev1.PodTemplateSpec{
 		ObjectMeta: v1.ObjectMeta{
 			Labels: map[string]string{
@@ -450,12 +464,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 			ServiceAccountName: app.Name,
 			Containers:         containers,
 			Volumes:            app.Spec.Volumes,
-			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot: new(true),
-				SeccompProfile: &corev1.SeccompProfile{
-					Type: corev1.SeccompProfileTypeRuntimeDefault,
-				},
-			},
+			SecurityContext:    podSecurityContext,
 		},
 	}
 }
