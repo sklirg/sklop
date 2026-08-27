@@ -382,6 +382,15 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		Env:          app.Spec.Env,
 		EnvFrom:      app.Spec.EnvFrom,
 		VolumeMounts: app.Spec.VolumeMounts,
+		// Adhere to the "restricted" Pod Security Standard.
+		// https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
+		SecurityContext: &corev1.SecurityContext{
+			ReadOnlyRootFilesystem:   new(true),
+			AllowPrivilegeEscalation: new(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
 	}
 	if app.Spec.Port != 0 {
 		containers[0].Ports = []corev1.ContainerPort{
@@ -402,6 +411,12 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 			ServiceAccountName: app.Name,
 			Containers:         containers,
 			Volumes:            app.Spec.Volumes,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot: new(true),
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
+			},
 		},
 	}
 }
