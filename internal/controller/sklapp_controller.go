@@ -145,7 +145,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		}
 		meta.SetStatusCondition(&app.Status.Conditions, condition)
 
-		logger.Info("updating sklapp status", "readyCondition", condition.Status, "reason", condition.Reason, "ready", app.Status.Ready)
+		logger.Info("updating sklapp status", "readyCondition", condition.Status, "reason", condition.Reason, "ready", app.Status.Healthy)
 		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
 			// A non-nil error must never be paired with a non-empty Result:
 			// controller-runtime ignores Result whenever error is set and
@@ -196,7 +196,7 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		return ctrl.Result{}, fmt.Errorf("failed to reconcile application type %q: %w", *app.Spec.ApplicationType, err)
 	}
 	if readyStatus != "" {
-		app.Status.Ready = readyStatus
+		app.Status.Healthy = readyStatus
 	}
 	if updated {
 		logger.Info("application type reconciliation made changes, requeueing", "applicationType", *app.Spec.ApplicationType)
