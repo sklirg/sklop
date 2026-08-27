@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -298,6 +299,22 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 		return nil, true, nil
 	}
 
+	// Reconcile drift: bring the replica count and pod template back in
+	// line with the SklApp spec if anything has changed them.
+	// Comparing only the projected, SklApp-managed fields (rather than the whole
+	// Template) avoids false positives from fields the API server defaults
+	// on write, such as Container.ImagePullPolicy.
+	desiredTemplate := podTemplate(app)
+	if !equality.Semantic.DeepEqual(deploy.Spec.Replicas, app.Spec.Replicas) ||
+		!equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desiredTemplate)) {
+		deploy.Spec.Replicas = app.Spec.Replicas
+		deploy.Spec.Template = desiredTemplate
+		if err := r.Update(ctx, &deploy); err != nil {
+			return nil, false, err
+		}
+		return &deploy, true, nil
+	}
+
 	return &deploy, false, nil
 }
 
@@ -375,6 +392,22 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 		return nil, true, nil
 	}
 
+	// Reconcile drift: bring the replica count and pod template back in
+	// line with the SklApp spec if anything has changed them.
+	// Comparing only the projected, SklApp-managed fields (rather than the whole
+	// Template) avoids false positives from fields the API server defaults
+	// on write, such as Container.ImagePullPolicy.
+	desiredTemplate := podTemplate(app)
+	if !equality.Semantic.DeepEqual(sts.Spec.Replicas, app.Spec.Replicas) ||
+		!equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desiredTemplate)) {
+		sts.Spec.Replicas = app.Spec.Replicas
+		sts.Spec.Template = desiredTemplate
+		if err := r.Update(ctx, &sts); err != nil {
+			return nil, false, err
+		}
+		return &sts, true, nil
+	}
+
 	return &sts, false, nil
 }
 
@@ -402,6 +435,7 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 			{
 				Name:          "http",
 				ContainerPort: app.Spec.Port,
+				Protocol:      corev1.ProtocolTCP,
 			},
 		}
 	}
@@ -423,6 +457,44 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 				},
 			},
 		},
+	}
+}
+
+// managedPodSpec is the subset of a PodTemplateSpec that SklApp actually
+// manages. Comparing this projection (rather than the whole PodTemplateSpec)
+// between the live and desired templates avoids false-positive drift from
+// fields the API server defaults on write - e.g. Container.TerminationMessagePolicy, PodSpec.DNSPolicy.
+type managedPodSpec struct {
+	Labels             map[string]string
+	ServiceAccountName string
+	Volumes            []corev1.Volume
+	Image              string
+	Resources          corev1.ResourceRequirements
+	Env                []corev1.EnvVar
+	EnvFrom            []corev1.EnvFromSource
+	VolumeMounts       []corev1.VolumeMount
+	Ports              []corev1.ContainerPort
+	PodSecurityContext *corev1.PodSecurityContext
+	SecurityContext    *corev1.SecurityContext
+}
+
+func projectPodTemplate(tmpl corev1.PodTemplateSpec) managedPodSpec {
+	var container corev1.Container
+	if len(tmpl.Spec.Containers) > 0 {
+		container = tmpl.Spec.Containers[0]
+	}
+	return managedPodSpec{
+		Labels:             tmpl.Labels,
+		ServiceAccountName: tmpl.Spec.ServiceAccountName,
+		Volumes:            tmpl.Spec.Volumes,
+		Image:              container.Image,
+		Resources:          container.Resources,
+		Env:                container.Env,
+		EnvFrom:            container.EnvFrom,
+		VolumeMounts:       container.VolumeMounts,
+		Ports:              container.Ports,
+		PodSecurityContext: tmpl.Spec.SecurityContext,
+		SecurityContext:    container.SecurityContext,
 	}
 }
 

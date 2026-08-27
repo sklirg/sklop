@@ -146,6 +146,43 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
 
+		It("should reconcile manual drift on the Deployment back to the SklApp spec", func() {
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling until the Deployment is created")
+			for range 2 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			app := &thingsv1.SklApp{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+
+			By("manually drifting the Deployment away from the SklApp spec")
+			driftedReplicas := int32(5)
+			deploy.Spec.Replicas = &driftedReplicas
+			deploy.Spec.Template.Spec.Containers[0].Image = "busybox:latest"
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+
+			By("reconciling to correct the drift")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+			Expect(deploy.Spec.Replicas).To(Equal(app.Spec.Replicas))
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal(app.Spec.Image))
+		})
+
 		It("should progress, create a StatefulSet, and become available", func() {
 			stsResourceName := "test-resource-sts"
 			stsNamespacedName := types.NamespacedName{Name: stsResourceName, Namespace: resourceNamespace}
