@@ -34,6 +34,23 @@ import (
 	thingsv1 "github.com/sklirg/sklop/api/v1"
 )
 
+// nginxWritableVolumes backs the directories the stock nginx image needs to
+// write to with emptyDir volumes, to satisfy the pod's ReadOnlyRootFilesystem.
+func nginxWritableVolumes() ([]corev1.Volume, []corev1.VolumeMount) {
+	dirs := []struct{ name, path string }{
+		{"cache", "/var/cache/nginx"},
+		{"run", "/var/run"},
+		{"tmp", "/tmp"},
+	}
+	volumes := make([]corev1.Volume, len(dirs))
+	mounts := make([]corev1.VolumeMount, len(dirs))
+	for i, dir := range dirs {
+		volumes[i] = corev1.Volume{Name: dir.name, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}
+		mounts[i] = corev1.VolumeMount{Name: dir.name, MountPath: dir.path}
+	}
+	return volumes, mounts
+}
+
 var _ = Describe("SklApp Controller", func() {
 	Context("When reconciling a resource", func() {
 		const (
@@ -53,13 +70,17 @@ var _ = Describe("SklApp Controller", func() {
 			By("creating the custom resource for the Kind SklApp")
 			err := k8sClient.Get(ctx, typeNamespacedName, sklapp)
 			if err != nil && errors.IsNotFound(err) {
+				volumes, volumeMounts := nginxWritableVolumes()
 				resource := &thingsv1.SklApp{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
 					},
 					Spec: thingsv1.SklAppSpec{
-						Image: "nginx:latest",
+						Image:        "nginx:latest",
+						RunAsUser:    new(int64(1000)),
+						Volumes:      volumes,
+						VolumeMounts: volumeMounts,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -188,6 +209,7 @@ var _ = Describe("SklApp Controller", func() {
 			stsNamespacedName := types.NamespacedName{Name: stsResourceName, Namespace: resourceNamespace}
 			applicationType := "StatefulSet"
 
+			stsVolumes, stsVolumeMounts := nginxWritableVolumes()
 			resource := &thingsv1.SklApp{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      stsResourceName,
@@ -196,6 +218,9 @@ var _ = Describe("SklApp Controller", func() {
 				Spec: thingsv1.SklAppSpec{
 					Image:           "nginx:latest",
 					ApplicationType: &applicationType,
+					RunAsUser:       new(int64(1000)),
+					Volumes:         stsVolumes,
+					VolumeMounts:    stsVolumeMounts,
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())

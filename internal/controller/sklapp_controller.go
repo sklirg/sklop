@@ -511,10 +511,38 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		Spec: corev1.PodSpec{
 			ServiceAccountName: app.Name,
 			Containers:         containers,
-			Volumes:            app.Spec.Volumes,
+			Volumes:            normalizeVolumeDefaults(app.Spec.Volumes),
 			SecurityContext:    podSecurityContext,
 		},
 	}
+}
+
+// normalizeVolumeDefaults returns a deep copy of volumes with DefaultMode
+// filled in wherever the API server would default it on write (ConfigMap,
+// Secret, DownwardAPI, and Projected volume sources all default it to 0644).
+// Without this, a freshly built desired template would never match the
+// live, already-defaulted object, making drift detection see a difference
+// - and re-apply the same "fix" - on every single reconcile forever.
+func normalizeVolumeDefaults(volumes []corev1.Volume) []corev1.Volume {
+	if volumes == nil {
+		return nil
+	}
+	normalized := make([]corev1.Volume, len(volumes))
+	for i := range volumes {
+		v := *volumes[i].DeepCopy()
+		switch {
+		case v.ConfigMap != nil && v.ConfigMap.DefaultMode == nil:
+			v.ConfigMap.DefaultMode = new(int32(0644))
+		case v.Secret != nil && v.Secret.DefaultMode == nil:
+			v.Secret.DefaultMode = new(int32(0644))
+		case v.DownwardAPI != nil && v.DownwardAPI.DefaultMode == nil:
+			v.DownwardAPI.DefaultMode = new(int32(0644))
+		case v.Projected != nil && v.Projected.DefaultMode == nil:
+			v.Projected.DefaultMode = new(int32(0644))
+		}
+		normalized[i] = v
+	}
+	return normalized
 }
 
 // managedPodSpec is the subset of a PodTemplateSpec that SklApp actually
