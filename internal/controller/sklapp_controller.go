@@ -292,16 +292,24 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 		Name:      app.Name,
 		Image:     app.Spec.Image,
 		Resources: app.Spec.Resources,
-		Ports: []corev1.ContainerPort{
+		Env:       app.Spec.Env,
+		EnvFrom:   app.Spec.EnvFrom,
+	}
+	if app.Spec.Port != 0 {
+		containers[0].Ports = []corev1.ContainerPort{
 			{
 				Name:          "http",
 				ContainerPort: app.Spec.Port,
 			},
-		},
-		Env:     app.Spec.Env,
-		EnvFrom: app.Spec.EnvFrom,
+		}
 	}
 	return corev1.PodTemplateSpec{
+		ObjectMeta: v1.ObjectMeta{
+			Labels: map[string]string{
+				"app":                    app.Name,
+				"app.kubernetes.io/name": app.Name,
+			},
+		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: app.Name,
 			Containers:         containers,
