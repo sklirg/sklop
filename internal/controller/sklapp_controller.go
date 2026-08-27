@@ -148,6 +148,12 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 			Message: fmt.Sprintf("Failed to get ServiceAccount: %s", err),
 		})
 		return ctrl.Result{}, err
+	} else if !hasOwnerReference(&serviceAccount, &app) {
+		serviceAccount.OwnerReferences = append(serviceAccount.OwnerReferences, ownerReference(&app))
+		if err := r.Update(ctx, &serviceAccount); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
 	updated, err := r.reconcileApplicationType(ctx, &app)
@@ -263,15 +269,7 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 		return &deploy, true, nil
 	}
 
-	hasOwnerRef := false
-	owners := deploy.GetOwnerReferences()
-	for _, owner := range owners {
-		if owner.UID == app.UID {
-			hasOwnerRef = true
-			break
-		}
-	}
-	if !hasOwnerRef {
+	if !hasOwnerReference(&deploy, app) {
 		deploy.OwnerReferences = append(deploy.OwnerReferences, ownerReference(app))
 		err := r.Update(ctx, &deploy)
 		if err != nil {
@@ -348,15 +346,7 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 		return &sts, true, nil
 	}
 
-	hasOwnerRef := false
-	owners := sts.GetOwnerReferences()
-	for _, owner := range owners {
-		if owner.UID == app.UID {
-			hasOwnerRef = true
-			break
-		}
-	}
-	if !hasOwnerRef {
+	if !hasOwnerReference(&sts, app) {
 		sts.OwnerReferences = append(sts.OwnerReferences, ownerReference(app))
 		err := r.Update(ctx, &sts)
 		if err != nil {
@@ -397,6 +387,15 @@ func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 			Containers:         containers,
 		},
 	}
+}
+
+func hasOwnerReference(obj v1.Object, app *thingsv1.SklApp) bool {
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.UID == app.UID {
+			return true
+		}
+	}
+	return false
 }
 
 func ownerReference(app *thingsv1.SklApp) v1.OwnerReference {
