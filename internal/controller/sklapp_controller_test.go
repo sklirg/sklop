@@ -34,6 +34,8 @@ import (
 	thingsv1 "github.com/sklirg/sklop/api/v1"
 )
 
+const nginxImage = "nginx:latest"
+
 // nginxWritableVolumes backs the directories the stock nginx image needs to
 // write to with emptyDir volumes, to satisfy the pod's ReadOnlyRootFilesystem.
 func nginxWritableVolumes() ([]corev1.Volume, []corev1.VolumeMount) {
@@ -77,7 +79,7 @@ var _ = Describe("SklApp Controller", func() {
 						Namespace: resourceNamespace,
 					},
 					Spec: thingsv1.SklAppSpec{
-						Image:        "nginx:latest",
+						Image:        nginxImage,
 						RunAsUser:    new(int64(1000)),
 						Volumes:      volumes,
 						VolumeMounts: volumeMounts,
@@ -204,6 +206,74 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal(app.Spec.Image))
 		})
 
+		It("should not perpetually redrift a projected volume with no defaultMode set", func() {
+			// Regression test: a projected volume (e.g. a ConfigMap source)
+			// left without an explicit defaultMode gets DefaultMode=0644
+			// defaulted by the API server on write. If the desired template
+			// doesn't account for that, every reconcile sees "drift" against
+			// the live, already-defaulted object and re-applies the same
+			// no-op update forever.
+			projResourceName := "test-resource-projvol"
+			projNamespacedName := types.NamespacedName{Name: projResourceName, Namespace: resourceNamespace}
+
+			resource := &thingsv1.SklApp{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      projResourceName,
+					Namespace: resourceNamespace,
+				},
+				Spec: thingsv1.SklAppSpec{
+					Image: nginxImage,
+					Volumes: []corev1.Volume{
+						{
+							Name: "config",
+							VolumeSource: corev1.VolumeSource{
+								Projected: &corev1.ProjectedVolumeSource{
+									Sources: []corev1.VolumeProjection{
+										{ConfigMap: &corev1.ConfigMapProjection{
+											LocalObjectReference: corev1.LocalObjectReference{Name: "does-not-need-to-exist"},
+										}},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.ServiceAccount{
+					ObjectMeta: metav1.ObjectMeta{Name: projResourceName, Namespace: resourceNamespace},
+				}))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &appsv1.Deployment{
+					ObjectMeta: metav1.ObjectMeta{Name: projResourceName, Namespace: resourceNamespace},
+				}))).To(Succeed())
+			})
+
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling until the Deployment is created and settled")
+			for range 3 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: projNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("reconciling once more and confirming no further drift is detected")
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: projNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			// A RequeueAfter here means the drift check found (and "fixed")
+			// a difference again - the perpetual-loop regression - since by
+			// this point the Deployment should already match the SklApp spec.
+			Expect(result.RequeueAfter).To(BeZero())
+		})
+
 		It("should progress, create a StatefulSet, and become available", func() {
 			stsResourceName := "test-resource-sts"
 			stsNamespacedName := types.NamespacedName{Name: stsResourceName, Namespace: resourceNamespace}
@@ -216,7 +286,7 @@ var _ = Describe("SklApp Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: thingsv1.SklAppSpec{
-					Image:           "nginx:latest",
+					Image:           nginxImage,
 					ApplicationType: &applicationType,
 					RunAsUser:       new(int64(1000)),
 					Volumes:         stsVolumes,
