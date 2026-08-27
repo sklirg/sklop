@@ -101,6 +101,16 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
+.PHONY: e2e-test-kind-podman
+e2e-test-kind-podman: export KIND_EXPERIMENTAL_PROVIDER = podman
+e2e-test-kind-podman: export KO_DOCKER_REPO = e2e.local
+e2e-test-kind-podman: setup-test-e2e manifests generate fmt vet ## Run the e2e tests via Kind's Podman provider, for machines without Docker.
+	# Pre-steps handled by test/e2e's BeforeSuite: ko builds the manager
+	# image to a tarball (KO_DOCKER_REPO=e2e.local, see e2eImageRepo in
+	# e2e_suite_test.go) and loads it into Kind via `kind load image-archive`.
+	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+	$(MAKE) cleanup-test-e2e
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run
