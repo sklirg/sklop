@@ -8,34 +8,30 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Release
+  publish:
+    name: Publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      new_release_published: ${{ steps.semantic-release.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic-release.outputs.new_release_version }}
+      id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - id: semantic-release
+      # Compute what the next version *would* be, without creating the git
+      # tag or GitHub release yet - so the image can be built and tagged
+      # with that version first. Only once the build succeeds do we cut the
+      # actual release, avoiding a released version with no matching image.
+      - id: dry-run
+        name: Determine next version (dry run)
         uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
+        with:
+          dry_run: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish:
-    name: Publish
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: 'go.mod'
@@ -44,11 +40,19 @@ jobs:
 
       - name: Build and publish image
         env:
-          NEW_RELEASE_PUBLISHED: ${{ needs.release.outputs.new_release_published }}
-          NEW_RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
+          NEW_RELEASE_PUBLISHED: ${{ steps.dry-run.outputs.new_release_published }}
+          NEW_RELEASE_VERSION: ${{ steps.dry-run.outputs.new_release_version }}
         run: |
           tags="latest,${{ github.sha }}"
           if [ "$NEW_RELEASE_PUBLISHED" = "true" ]; then
             tags="${tags},v${NEW_RELEASE_VERSION}"
           fi
           ko build -B --tags "$tags" ./cmd/sklop
+
+      # Only now, with a matching image already published, cut the real
+      # release: creates the git tag and GitHub release for real.
+      - name: Create release
+        if: steps.dry-run.outputs.new_release_published == 'true'
+        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
