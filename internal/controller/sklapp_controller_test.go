@@ -143,5 +143,68 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(availableCondition).NotTo(BeNil())
 			Expect(availableCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
+
+		It("should progress, create a StatefulSet, and become available", func() {
+			stsResourceName := "test-resource-sts"
+			stsNamespacedName := types.NamespacedName{Name: stsResourceName, Namespace: resourceNamespace}
+			applicationType := "StatefulSet"
+
+			resource := &thingsv1.SklApp{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      stsResourceName,
+					Namespace: resourceNamespace,
+				},
+				Spec: thingsv1.SklAppSpec{
+					Image:           "nginx:latest",
+					ApplicationType: &applicationType,
+				},
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.ServiceAccount{
+					ObjectMeta: metav1.ObjectMeta{Name: stsResourceName, Namespace: resourceNamespace},
+				}))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &appsv1.StatefulSet{
+					ObjectMeta: metav1.ObjectMeta{Name: stsResourceName, Namespace: resourceNamespace},
+				}))).To(Succeed())
+			})
+
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling for the first time to create the ServiceAccount")
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: stsNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, stsNamespacedName, sts)).To(HaveOccurred())
+
+			By("reconciling again to create the StatefulSet")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: stsNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, stsNamespacedName, sts)).To(Succeed())
+
+			updated := &thingsv1.SklApp{}
+			Expect(k8sClient.Get(ctx, stsNamespacedName, updated)).To(Succeed())
+			Expect(meta.FindStatusCondition(updated.Status.Conditions, SklappStatusAvailable)).To(BeNil())
+
+			By("reconciling a third time to reach the Available condition")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: stsNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, stsNamespacedName, updated)).To(Succeed())
+			availableCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusAvailable)
+			Expect(availableCondition).NotTo(BeNil())
+			Expect(availableCondition.Status).To(Equal(metav1.ConditionTrue))
+		})
 	})
 })

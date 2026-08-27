@@ -183,16 +183,15 @@ func (r *SklAppReconciler) reconcileApplicationType(ctx context.Context, app *th
 		}
 		return updated, nil
 	case "StatefulSet":
-		_, err := r.statefulset(ctx)
+		_, updated, err := r.statefulset(ctx, app)
 		if err != nil {
 			return false, err
 		}
+		return updated, nil
 
 	default:
 		return false, fmt.Errorf("application type \"%s\" not valid", *app.Spec.ApplicationType)
 	}
-
-	return false, nil
 }
 
 func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp) (*appsv1.Deployment, bool, error) {
@@ -280,9 +279,89 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 	return &deploy, false, nil
 }
 
-func (r *SklAppReconciler) statefulset(ctx context.Context) (*appsv1.StatefulSet, error) {
+func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp) (*appsv1.StatefulSet, bool, error) {
+	// look for apps via same name (default)
+	// if no found, look for apps via labels => if found, set ownerreference
+	// if still no found, create it
+
 	var sts appsv1.StatefulSet
-	return &sts, nil
+	found := true
+	err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, &sts)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, false, err
+	} else if err != nil {
+		found = false
+	}
+
+	// Look for the statefulset via labels instead
+	if !found {
+		req, err := labels.NewRequirement(SklappTakeoverLabel, selection.Equals, []string{app.Name})
+		if err != nil {
+			return nil, false, err
+		}
+		selector := labels.NewSelector().Add(*req)
+		var statefulsetlist appsv1.StatefulSetList
+		err = r.List(ctx, &statefulsetlist, &client.ListOptions{
+			LabelSelector: client.MatchingLabelsSelector{
+				Selector: selector,
+			},
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return nil, false, err
+		}
+		if len(statefulsetlist.Items) > 1 {
+			return nil, false, fmt.Errorf("found more than 1 statefulset labelled with this app")
+		}
+		if len(statefulsetlist.Items) == 1 {
+			sts = statefulsetlist.Items[0]
+			found = true
+		}
+	}
+
+	// If still no statefulset, create it
+	if !found {
+		sts = appsv1.StatefulSet{
+			ObjectMeta: v1.ObjectMeta{
+				Name:            app.Name,
+				Namespace:       app.Namespace,
+				OwnerReferences: []v1.OwnerReference{ownerReference(app)},
+			},
+			Spec: appsv1.StatefulSetSpec{
+				Replicas: app.Spec.Replicas,
+				Selector: &v1.LabelSelector{
+					MatchLabels: map[string]string{
+						"app":                    app.Name,
+						"app.kubernetes.io/name": app.Name,
+					},
+				},
+				Template: podTemplate(app),
+			},
+		}
+		err := r.Create(ctx, &sts)
+		if err != nil {
+			return nil, false, err
+		}
+		return &sts, true, nil
+	}
+
+	hasOwnerRef := false
+	owners := sts.GetOwnerReferences()
+	for _, owner := range owners {
+		if owner.UID == app.UID {
+			hasOwnerRef = true
+			break
+		}
+	}
+	if !hasOwnerRef {
+		sts.OwnerReferences = append(sts.OwnerReferences, ownerReference(app))
+		err := r.Update(ctx, &sts)
+		if err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
+	}
+
+	return &sts, false, nil
 }
 
 func podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
@@ -332,6 +411,7 @@ func (r *SklAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&thingsv1.SklApp{}).
 		Named("sklapp").
 		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
 		Complete(r)
