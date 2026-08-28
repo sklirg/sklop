@@ -68,6 +68,15 @@ type SklAppSpec struct {
 	// RunAsUser is set here to a non-root UID the image supports.
 	// +kubebuilder:validation:Optional
 	RunAsUser *int64 `json:"runAsUser"`
+	// StartupProbe for the application container.
+	// +kubebuilder:validation:Optional
+	StartupProbe *corev1.Probe `json:"startupProbe"`
+	// ReadinessProbe for the application container.
+	// +kubebuilder:validation:Optional
+	ReadinessProbe *corev1.Probe `json:"readinessProbe"`
+	// LivenessProbe for the application container.
+	// +kubebuilder:validation:Optional
+	LivenessProbe *corev1.Probe `json:"livenessProbe"`
 	// URL exposes the application to the world. When set, a Service and an
 	// HTTPRoute are created routing traffic for this hostname to the app,
 	// fronted by an oauth2-proxy sidecar that authenticates requests before

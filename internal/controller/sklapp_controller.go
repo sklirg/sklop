@@ -751,12 +751,15 @@ func (r *SklAppReconciler) oauth2ProxyInitContainer(app *thingsv1.SklApp) corev1
 func (r *SklAppReconciler) podTemplate(app *thingsv1.SklApp) corev1.PodTemplateSpec {
 	containers := make([]corev1.Container, 1)
 	containers[0] = corev1.Container{
-		Name:         app.Name,
-		Image:        app.Spec.Image,
-		Resources:    app.Spec.Resources,
-		Env:          app.Spec.Env,
-		EnvFrom:      app.Spec.EnvFrom,
-		VolumeMounts: app.Spec.VolumeMounts,
+		Name:           app.Name,
+		Image:          app.Spec.Image,
+		Resources:      app.Spec.Resources,
+		Env:            app.Spec.Env,
+		EnvFrom:        app.Spec.EnvFrom,
+		VolumeMounts:   app.Spec.VolumeMounts,
+		StartupProbe:   app.Spec.StartupProbe,
+		ReadinessProbe: app.Spec.ReadinessProbe,
+		LivenessProbe:  app.Spec.LivenessProbe,
 		// Adhere to the "restricted" Pod Security Standard.
 		// https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
 		SecurityContext: &corev1.SecurityContext{
@@ -855,6 +858,9 @@ type managedPodSpec struct {
 	EnvFrom            []corev1.EnvFromSource
 	VolumeMounts       []corev1.VolumeMount
 	Ports              []corev1.ContainerPort
+	StartupProbe       *corev1.Probe
+	ReadinessProbe     *corev1.Probe
+	LivenessProbe      *corev1.Probe
 	PodSecurityContext *corev1.PodSecurityContext
 	SecurityContext    *corev1.SecurityContext
 }
@@ -905,6 +911,9 @@ func projectPodTemplate(tmpl corev1.PodTemplateSpec) managedPodSpec {
 		EnvFrom:            container.EnvFrom,
 		VolumeMounts:       container.VolumeMounts,
 		Ports:              container.Ports,
+		StartupProbe:       container.StartupProbe,
+		ReadinessProbe:     container.ReadinessProbe,
+		LivenessProbe:      container.LivenessProbe,
 		PodSecurityContext: tmpl.Spec.SecurityContext,
 		SecurityContext:    container.SecurityContext,
 	}

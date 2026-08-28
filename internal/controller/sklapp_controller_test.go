@@ -170,6 +170,56 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
 
+		It("should propagate startup, readiness, and liveness probes to the Deployment's container", func() {
+			app := &thingsv1.SklApp{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
+
+			app.Spec.StartupProbe = &corev1.Probe{
+				ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				FailureThreshold: 30,
+				PeriodSeconds:    1,
+			}
+			app.Spec.ReadinessProbe = &corev1.Probe{
+				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				PeriodSeconds: 5,
+			}
+			app.Spec.LivenessProbe = &corev1.Probe{
+				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				PeriodSeconds: 10,
+			}
+			Expect(k8sClient.Update(ctx, app)).To(Succeed())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
+
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling until the Deployment is created")
+			for range 2 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+			container := deploy.Spec.Template.Spec.Containers[0]
+			// Compare handler/threshold fields individually rather than the
+			// whole struct: the API server defaults TimeoutSeconds and
+			// SuccessThreshold on the built-in Deployment it creates, but
+			// the CRD's own spec (fetched above) never receives that
+			// defaulting, so a deep Equal would spuriously fail.
+			Expect(container.StartupProbe.Exec).To(Equal(app.Spec.StartupProbe.Exec))
+			Expect(container.StartupProbe.FailureThreshold).To(Equal(app.Spec.StartupProbe.FailureThreshold))
+			Expect(container.StartupProbe.PeriodSeconds).To(Equal(app.Spec.StartupProbe.PeriodSeconds))
+			Expect(container.ReadinessProbe.Exec).To(Equal(app.Spec.ReadinessProbe.Exec))
+			Expect(container.ReadinessProbe.PeriodSeconds).To(Equal(app.Spec.ReadinessProbe.PeriodSeconds))
+			Expect(container.LivenessProbe.Exec).To(Equal(app.Spec.LivenessProbe.Exec))
+			Expect(container.LivenessProbe.PeriodSeconds).To(Equal(app.Spec.LivenessProbe.PeriodSeconds))
+		})
+
 		It("should reconcile manual drift on the Deployment back to the SklApp spec", func() {
 			controllerReconciler := &SklAppReconciler{
 				Client: k8sClient,
