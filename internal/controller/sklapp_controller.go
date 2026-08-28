@@ -49,13 +49,18 @@ const (
 	SklappAppLabel     string = "app"
 	SklappAppNameLabel string = "app.kubernetes.io/name"
 
-	// SklappStatusReady is the single canonical condition type reflecting
+	// SklappStatusHealthy is the single canonical condition type reflecting
 	// the outcome of the most recent reconcile pass.
-	SklappStatusReady string = "Ready"
+	SklappStatusHealthy string = "Healthy"
 
-	SklappStatusReconciling         string = "Reconciling"
-	SklappStatusReconciliationError string = "ReconciliationError"
-	SklappStatusReconciled          string = "Reconciled"
+	// SklappStatusProgressing, SklappStatusAvailable, and SklappStatusDegraded
+	// are the Reason values the Healthy condition is set to, mirroring the
+	// standard condition-reason vocabulary: the resource is being created or
+	// updated, is fully functional, or failed to reach/maintain its desired
+	// state.
+	SklappStatusProgressing string = "Progressing"
+	SklappStatusAvailable   string = "Available"
+	SklappStatusDegraded    string = "Degraded"
 
 	// DefaultOauth2ProxyImage is used when the controller isn't started
 	// with --oauth2-proxy-image.
@@ -120,32 +125,32 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 
 	logger.Info("reconciling")
 
-	ready := false
+	healthy := false
 
-	// Update the Ready condition and persist status when exiting, so it
+	// Update the Healthy condition and persist status when exiting, so it
 	// always reflects the outcome of this reconcile pass - regardless of
 	// which return path below was taken - rather than a per-branch
 	// condition type that may not get updated on every pass.
 	defer func() {
 		condition := v1.Condition{
-			Type:    SklappStatusReady,
+			Type:    SklappStatusHealthy,
 			Status:  v1.ConditionUnknown,
-			Reason:  SklappStatusReconciling,
-			Message: "Reconciling",
+			Reason:  SklappStatusProgressing,
+			Message: "Progressing",
 		}
 		switch {
 		case reterr != nil:
 			condition.Status = v1.ConditionFalse
-			condition.Reason = SklappStatusReconciliationError
+			condition.Reason = SklappStatusDegraded
 			condition.Message = reterr.Error()
-		case ready:
+		case healthy:
 			condition.Status = v1.ConditionTrue
-			condition.Reason = SklappStatusReconciled
-			condition.Message = "Reconciled"
+			condition.Reason = SklappStatusAvailable
+			condition.Message = "Available"
 		}
 		meta.SetStatusCondition(&app.Status.Conditions, condition)
 
-		logger.Info("updating sklapp status", "readyCondition", condition.Status, "reason", condition.Reason, "ready", app.Status.Healthy)
+		logger.Info("updating sklapp status", "healthyCondition", condition.Status, "reason", condition.Reason, "healthy", app.Status.Healthy)
 		if statusErr := r.Status().Update(ctx, &app); statusErr != nil {
 			// A non-nil error must never be paired with a non-empty Result:
 			// controller-runtime ignores Result whenever error is set and
@@ -221,8 +226,8 @@ func (r *SklAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 		}
 	}
 
-	logger.Info("reconcile complete, nothing left to do", "ready", readyStatus)
-	ready = true
+	logger.Info("reconcile complete, nothing left to do", "healthy", readyStatus)
+	healthy = true
 
 	return ctrl.Result{}, nil
 }

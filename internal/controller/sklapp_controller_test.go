@@ -143,9 +143,9 @@ var _ = Describe("SklApp Controller", func() {
 
 			updated := &thingsv1.SklApp{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			readyCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusReady)
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionUnknown))
+			healthyCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionUnknown))
 
 			deploy := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(HaveOccurred())
@@ -158,9 +158,9 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			readyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusReady)
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionUnknown))
+			healthyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionUnknown))
 
 			By("reconciling a third time to become Ready")
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -169,9 +169,9 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			readyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusReady)
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+			healthyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
 
 		It("should propagate startup, readiness, and liveness probes to the Deployment's container", func() {
@@ -382,9 +382,9 @@ var _ = Describe("SklApp Controller", func() {
 
 			updated := &thingsv1.SklApp{}
 			Expect(k8sClient.Get(ctx, stsNamespacedName, updated)).To(Succeed())
-			readyCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusReady)
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionUnknown))
+			healthyCondition := meta.FindStatusCondition(updated.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionUnknown))
 
 			By("reconciling a third time to become Ready")
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -393,9 +393,9 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, stsNamespacedName, updated)).To(Succeed())
-			readyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusReady)
-			Expect(readyCondition).NotTo(BeNil())
-			Expect(readyCondition.Status).To(Equal(metav1.ConditionTrue))
+			healthyCondition = meta.FindStatusCondition(updated.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 })

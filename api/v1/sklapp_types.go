@@ -120,21 +120,22 @@ type SklAppStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// The "Ready" condition reflects the outcome of the most recent reconcile
-	// pass: True once the desired Deployment/StatefulSet exists and is owned
-	// by this SklApp, False on a reconciliation error, Unknown while still
-	// being created or updated.
 	// Healthy reflects the readiness of the underlying Deployment/StatefulSet,
 	// formatted as "readyReplicas/replicas".
+	//
+	// It's set alongside the outcome of the most recent reconcile pass:
+	// True once the desired Deployment/StatefulSet exists and is owned by
+	// this SklApp, False on a reconciliation error, Unknown while still
+	// being created or updated.
 	// +optional
 	Healthy string `json:"healthy,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.ready"
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.healthy"
 // +kubebuilder:printcolumn:name="URL",type="string",JSONPath=".spec.url"
-// +kubebuilder:printcolumn:name="Healthy",type="string",JSONPath=".status.conditions[?(@.type=='Healthy')].status"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.conditions[?(@.type=='Healthy')].reason"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // SklApp is the Schema for the sklapps API

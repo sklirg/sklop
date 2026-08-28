@@ -15,14 +15,14 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.ready
+    - jsonPath: .status.healthy
       name: Ready
       type: string
     - jsonPath: .spec.url
       name: URL
       type: string
-    - jsonPath: .status.conditions[?(@.type=='Healthy')].status
-      name: Healthy
+    - jsonPath: .status.conditions[?(@.type=='Healthy')].reason
+      name: Status
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -2872,6 +2872,11 @@ spec:
                 description: |-
                   Healthy reflects the readiness of the underlying Deployment/StatefulSet,
                   formatted as "readyReplicas/replicas".
+
+                  It's set alongside the outcome of the most recent reconcile pass:
+                  True once the desired Deployment/StatefulSet exists and is owned by
+                  this SklApp, False on a reconciliation error, Unknown while still
+                  being created or updated.
                 type: string
             type: object
         required:
