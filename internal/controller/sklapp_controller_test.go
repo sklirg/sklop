@@ -37,6 +37,10 @@ import (
 
 const nginxImage = "nginx:latest"
 
+// probeCommand is a trivially-successful exec probe command, reused across
+// the startup/readiness/liveness probe test cases below.
+var probeCommand = []string{"true"}
+
 // nginxWritableVolumes backs the directories the stock nginx image needs to
 // write to with emptyDir volumes, to satisfy the pod's ReadOnlyRootFilesystem.
 func nginxWritableVolumes() ([]corev1.Volume, []corev1.VolumeMount) {
@@ -175,16 +179,16 @@ var _ = Describe("SklApp Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
 
 			app.Spec.StartupProbe = &corev1.Probe{
-				ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				ProbeHandler:     corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: probeCommand}},
 				FailureThreshold: 30,
 				PeriodSeconds:    1,
 			}
 			app.Spec.ReadinessProbe = &corev1.Probe{
-				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: probeCommand}},
 				PeriodSeconds: 5,
 			}
 			app.Spec.LivenessProbe = &corev1.Probe{
-				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}},
+				ProbeHandler:  corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: probeCommand}},
 				PeriodSeconds: 10,
 			}
 			Expect(k8sClient.Update(ctx, app)).To(Succeed())
