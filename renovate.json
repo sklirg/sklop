@@ -4,5 +4,16 @@
     "config:recommended",
     "helpers:pinGitHubActionDigests"
   ],
-  "minimumReleaseAge": "3 days"
+  "minimumReleaseAge": "3 days",
+  "packageRules": [
+    {
+      "groupName": "ginkgo and gomega",
+      "matchPackageNames": [
+        "github.com/onsi/ginkgo/v2",
+        "github.com/onsi/gomega"
+      ],
+      "semanticCommitType": "deps",
+      "automerge": true
+    }
+  ]
 }
