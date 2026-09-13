@@ -47,7 +47,9 @@ jobs:
           if [ "$NEW_RELEASE_PUBLISHED" = "true" ]; then
             tags="${tags},v${NEW_RELEASE_VERSION}"
           fi
-          ko build -B --tags "$tags" ./cmd/sklop
+          ko build -B --tags "$tags" \
+            --image-label org.opencontainers.image.source=https://github.com/sklirg/sklop \
+            ./cmd/sklop
 
       # Only now, with a matching image already published, cut the real
       # release: creates the git tag and GitHub release for real.

@@ -143,7 +143,9 @@ docker-build: ## Build a local container image with the manager, tagged $(TAG).
 .PHONY: docker-push
 docker-push: export KO_DOCKER_REPO := $(KO_DOCKER_REPO)
 docker-push: ## Push a container image with the manager, tagged $(TAG), to KO_DOCKER_REPO.
-	$(CONTAINER_TOOL) build --bare --tags $(TAG) ./cmd/sklop
+	$(CONTAINER_TOOL) build --bare --tags $(TAG) \
+		--image-label org.opencontainers.image.source=https://github.com/sklirg/sklop \
+		./cmd/sklop
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
