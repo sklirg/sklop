@@ -145,6 +145,10 @@ docker-push: export KO_DOCKER_REPO := $(KO_DOCKER_REPO)
 docker-push: ## Push a container image with the manager, tagged $(TAG), to KO_DOCKER_REPO.
 	$(CONTAINER_TOOL) build --bare --tags $(TAG) \
 		--image-label org.opencontainers.image.source=https://github.com/sklirg/sklop \
+		--image-label org.opencontainers.image.vendor=sklirg \
+		--image-label org.opencontainers.image.title=sklop \
+		--image-label org.opencontainers.image.authors=https://github.com/sklirg \
+		--image-label org.opencontainers.image.url=https://github.com/sklirg/sklop \
 		./cmd/sklop
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple

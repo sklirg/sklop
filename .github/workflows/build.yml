@@ -47,8 +47,13 @@ jobs:
           if [ "$NEW_RELEASE_PUBLISHED" = "true" ]; then
             tags="${tags},v${NEW_RELEASE_VERSION}"
           fi
+          repo_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           ko build -B --tags "$tags" \
-            --image-label org.opencontainers.image.source=https://github.com/sklirg/sklop \
+            --image-label org.opencontainers.image.source="$repo_url" \
+            --image-label org.opencontainers.image.vendor="$GITHUB_REPOSITORY_OWNER" \
+            --image-label org.opencontainers.image.title="${GITHUB_REPOSITORY#*/}" \
+            --image-label org.opencontainers.image.authors="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY_OWNER}" \
+            --image-label org.opencontainers.image.url="$repo_url" \
             ./cmd/sklop
 
       # Only now, with a matching image already published, cut the real
