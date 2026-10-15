@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -327,6 +328,91 @@ var _ = Describe("SklApp Controller", func() {
 			// a difference again - the perpetual-loop regression - since by
 			// this point the Deployment should already match the SklApp spec.
 			Expect(result.RequeueAfter).To(BeZero())
+		})
+
+		It("should not perpetually redrift a probe relying on API server defaults", func() {
+			// Regression test: an httpGet probe without scheme, periodSeconds,
+			// successThreshold or timeoutSeconds gets those defaulted by the
+			// API server, which must not be seen as drift on every reconcile.
+			app := &thingsv1.SklApp{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
+			app.Spec.StartupProbe = &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+					Path: "/",
+					Port: intstr.FromInt32(80),
+				}},
+				FailureThreshold: 10,
+			}
+			Expect(k8sClient.Update(ctx, app)).To(Succeed())
+
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling until the Deployment is created and settled")
+			for range 3 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("reconciling once more and confirming no further drift is detected")
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, app)).To(Succeed())
+			healthyCondition := meta.FindStatusCondition(app.Status.Conditions, SklappStatusHealthy)
+			Expect(healthyCondition).NotTo(BeNil())
+			Expect(healthyCondition.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should keep pod template annotations set by kubectl rollout restart", func() {
+			controllerReconciler := &SklAppReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			By("reconciling until the Deployment is created")
+			for range 2 {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("annotating the pod template the way kubectl rollout restart does")
+			const restartedAtAnnotation = "kubectl.kubernetes.io/restartedAt"
+			deploy := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+			deploy.Spec.Template.Annotations = map[string]string{restartedAtAnnotation: "2026-10-15T17:00:00Z"}
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+
+			By("reconciling and confirming it's neither seen as drift nor reverted")
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(restartedAtAnnotation, "2026-10-15T17:00:00Z"))
+
+			By("drifting the image and confirming the correction keeps the annotation")
+			deploy.Spec.Template.Spec.Containers[0].Image = "busybox:latest"
+			Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, deploy)).To(Succeed())
+			Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal(nginxImage))
+			Expect(deploy.Spec.Template.Annotations).To(HaveKeyWithValue(restartedAtAnnotation, "2026-10-15T17:00:00Z"))
 		})
 
 		It("should progress, create a StatefulSet, and become available", func() {

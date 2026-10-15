@@ -371,17 +371,30 @@ func (r *SklAppReconciler) deployment(ctx context.Context, app *thingsv1.SklApp)
 
 	// Reconcile drift: bring the replica count and pod template back in
 	// line with the SklApp spec if anything has changed them.
+	// The desired object is dry-run through the API server first so it gets
+	// the same defaulting as the live object (probe timeouts/periods, volume
+	// defaultMode, ImagePullPolicy, ...); comparing against a raw, undefaulted
+	// template would see "drift" on every pass and never settle.
 	// Comparing only the projected, SklApp-managed fields (rather than the whole
-	// Template) avoids false positives from fields the API server defaults
-	// on write, such as Container.ImagePullPolicy.
-	desiredTemplate := r.podTemplate(app)
-	replicasDrifted := !equality.Semantic.DeepEqual(deploy.Spec.Replicas, app.Spec.Replicas)
-	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desiredTemplate))
+	// Template) leaves fields SklApp doesn't manage out of the comparison.
+	desired := deploy.DeepCopy()
+	desired.Spec.Replicas = app.Spec.Replicas
+	desired.Spec.Template = r.podTemplate(app)
+	// SklApp doesn't manage pod template annotations, so keep whatever others
+	// have set - notably kubectl.kubernetes.io/restartedAt from
+	// `kubectl rollout restart`, which would otherwise be reverted.
+	desired.Spec.Template.Annotations = deploy.Spec.Template.Annotations
+	if err := r.Update(ctx, desired, client.DryRunAll); err != nil {
+		logger.Error(err, "failed to dry-run deployment update")
+		return nil, false, err
+	}
+	replicasDrifted := !equality.Semantic.DeepEqual(deploy.Spec.Replicas, desired.Spec.Replicas)
+	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(deploy.Spec.Template), projectPodTemplate(desired.Spec.Template))
 	if replicasDrifted || templateDrifted {
 		logger.Info("deployment spec drifted from SklApp spec, correcting it and requeueing",
 			"replicasDrifted", replicasDrifted, "templateDrifted", templateDrifted)
-		deploy.Spec.Replicas = app.Spec.Replicas
-		deploy.Spec.Template = desiredTemplate
+		deploy.Spec.Replicas = desired.Spec.Replicas
+		deploy.Spec.Template = desired.Spec.Template
 		if err := r.Update(ctx, &deploy); err != nil {
 			logger.Error(err, "failed to correct deployment drift")
 			return nil, false, err
@@ -482,17 +495,30 @@ func (r *SklAppReconciler) statefulset(ctx context.Context, app *thingsv1.SklApp
 
 	// Reconcile drift: bring the replica count and pod template back in
 	// line with the SklApp spec if anything has changed them.
+	// The desired object is dry-run through the API server first so it gets
+	// the same defaulting as the live object (probe timeouts/periods, volume
+	// defaultMode, ImagePullPolicy, ...); comparing against a raw, undefaulted
+	// template would see "drift" on every pass and never settle.
 	// Comparing only the projected, SklApp-managed fields (rather than the whole
-	// Template) avoids false positives from fields the API server defaults
-	// on write, such as Container.ImagePullPolicy.
-	desiredTemplate := r.podTemplate(app)
-	replicasDrifted := !equality.Semantic.DeepEqual(sts.Spec.Replicas, app.Spec.Replicas)
-	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desiredTemplate))
+	// Template) leaves fields SklApp doesn't manage out of the comparison.
+	desired := sts.DeepCopy()
+	desired.Spec.Replicas = app.Spec.Replicas
+	desired.Spec.Template = r.podTemplate(app)
+	// SklApp doesn't manage pod template annotations, so keep whatever others
+	// have set - notably kubectl.kubernetes.io/restartedAt from
+	// `kubectl rollout restart`, which would otherwise be reverted.
+	desired.Spec.Template.Annotations = sts.Spec.Template.Annotations
+	if err := r.Update(ctx, desired, client.DryRunAll); err != nil {
+		logger.Error(err, "failed to dry-run statefulset update")
+		return nil, false, err
+	}
+	replicasDrifted := !equality.Semantic.DeepEqual(sts.Spec.Replicas, desired.Spec.Replicas)
+	templateDrifted := !equality.Semantic.DeepEqual(projectPodTemplate(sts.Spec.Template), projectPodTemplate(desired.Spec.Template))
 	if replicasDrifted || templateDrifted {
 		logger.Info("statefulset spec drifted from SklApp spec, correcting it and requeueing",
 			"replicasDrifted", replicasDrifted, "templateDrifted", templateDrifted)
-		sts.Spec.Replicas = app.Spec.Replicas
-		sts.Spec.Template = desiredTemplate
+		sts.Spec.Replicas = desired.Spec.Replicas
+		sts.Spec.Template = desired.Spec.Template
 		if err := r.Update(ctx, &sts); err != nil {
 			logger.Error(err, "failed to correct statefulset drift")
 			return nil, false, err
@@ -814,38 +840,10 @@ func (r *SklAppReconciler) podTemplate(app *thingsv1.SklApp) corev1.PodTemplateS
 			ServiceAccountName: app.Name,
 			InitContainers:     initContainers,
 			Containers:         containers,
-			Volumes:            normalizeVolumeDefaults(app.Spec.Volumes),
+			Volumes:            app.Spec.Volumes,
 			SecurityContext:    podSecurityContext,
 		},
 	}
-}
-
-// normalizeVolumeDefaults returns a deep copy of volumes with DefaultMode
-// filled in wherever the API server would default it on write (ConfigMap,
-// Secret, DownwardAPI, and Projected volume sources all default it to 0644).
-// Without this, a freshly built desired template would never match the
-// live, already-defaulted object, making drift detection see a difference
-// - and re-apply the same "fix" - on every single reconcile forever.
-func normalizeVolumeDefaults(volumes []corev1.Volume) []corev1.Volume {
-	if volumes == nil {
-		return nil
-	}
-	normalized := make([]corev1.Volume, len(volumes))
-	for i := range volumes {
-		v := *volumes[i].DeepCopy()
-		switch {
-		case v.ConfigMap != nil && v.ConfigMap.DefaultMode == nil:
-			v.ConfigMap.DefaultMode = new(int32(0644))
-		case v.Secret != nil && v.Secret.DefaultMode == nil:
-			v.Secret.DefaultMode = new(int32(0644))
-		case v.DownwardAPI != nil && v.DownwardAPI.DefaultMode == nil:
-			v.DownwardAPI.DefaultMode = new(int32(0644))
-		case v.Projected != nil && v.Projected.DefaultMode == nil:
-			v.Projected.DefaultMode = new(int32(0644))
-		}
-		normalized[i] = v
-	}
-	return normalized
 }
 
 // managedPodSpec is the subset of a PodTemplateSpec that SklApp actually
